@@ -251,7 +251,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03c";
+const VERSION = "2026-11-03d";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -331,13 +331,19 @@ function valveSend(str, times = 1) {
 }
 
 async function connectValve() {
+  // Bluefy 用 filters（namePrefix／services）會篩到什麼都不剩，所以列出全部裝置讓使用者選
   const dev = await navigator.bluetooth.requestDevice({
-    filters: [{ namePrefix: "AME" }, { services: [U("ffe1")] }],
-    optionalServices: [U("ffe1")],
+    acceptAllDevices: true, optionalServices: [U("ffe1")],
   });
+  if (obd.dev && obd.dev.id === dev.id) throw new Error("這台已經當成 OBD 連著了，請選 AME 開頭的控制器");
   valve.dev = dev;
+  try { await openValve(); }
+  catch (e) {
+    valve.dev = null; valve.ch = null;
+    try { dev.gatt.disconnect(); } catch (x) {}
+    throw new Error("「" + (dev.name || "未命名裝置") + "」不是排氣閥門控制器，請選 AME 開頭的那台（" + errText(e) + "）");
+  }
   dev.addEventListener("gattserverdisconnected", onValveLost);
-  await openValve();
 }
 async function openValve() {
   const srv = await valve.dev.gatt.connect();
@@ -401,8 +407,8 @@ async function connectObd() {
   const dev = await navigator.bluetooth.requestDevice({
     acceptAllDevices: true, optionalServices: ELM_SPECS.map(s => s.svc),
   });
-  obd.dev = dev;
-  dev.addEventListener("gattserverdisconnected", () => { obd.connected = false; renderConn(); log("OBD 斷線"); });
+  if ((dev.name || "").startsWith("AME") || (valve.dev && valve.dev.id === dev.id))
+    throw new Error("選到排氣閥門控制器了，OBD 請選另一台（例如 IOS-Vlink）");
   const srv = await dev.gatt.connect();
   let found = null;
   for (const sp of ELM_SPECS) {
@@ -411,7 +417,12 @@ async function connectObd() {
       found = { w: await svc.getCharacteristic(sp.w), n: await svc.getCharacteristic(sp.n) }; break;
     } catch (e) {}
   }
-  if (!found) throw new Error("找不到 ELM327 的藍牙服務，這顆 OBD 可能不是 BLE 版");
+  if (!found) {
+    try { dev.gatt.disconnect(); } catch (x) {}
+    throw new Error("「" + (dev.name || "未命名裝置") + "」找不到 ELM327 的藍牙服務，可能選錯裝置，或這顆 OBD 不是 BLE 版");
+  }
+  obd.dev = dev;
+  dev.addEventListener("gattserverdisconnected", () => { obd.connected = false; renderConn(); log("OBD 斷線"); });
   obd.w = found.w; obd.n = found.n;
   obd.n.addEventListener("characteristicvaluechanged", onElmData);
   await obd.n.startNotifications();
