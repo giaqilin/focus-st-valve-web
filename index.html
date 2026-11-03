@@ -89,6 +89,9 @@ td input{padding:7px 8px}
 .testgrid button{padding:10px 0;border-radius:10px;background:var(--panel2);border:1px solid var(--line);font-weight:700}
 .testgrid button.yes{background:#123d27;border-color:var(--ok)}
 .testgrid button.no{background:#3d1219;border-color:var(--bad)}
+.testgrid button.mix{background:#3d3212;border-color:var(--accent)}
+.testgrid button small{display:block;font-size:10px;font-weight:500;color:var(--muted)}
+.testgrid.busy button{opacity:.45}
 .log{background:#07090b;border:1px solid var(--line);border-radius:10px;padding:8px;font:12px/1.5 ui-monospace,Menlo,monospace;height:180px;overflow:auto;white-space:pre-wrap;color:#b8c2cc}
 .ask{display:none;margin-top:10px;padding:12px;border-radius:12px;background:var(--panel2);border:1px solid var(--accent)}
 .ask.show{display:block}
@@ -220,11 +223,15 @@ td input{padding:7px 8px}
 
   <div class="card mt">
     <h2>測試任意開度</h2>
-    <p class="note" style="margin-top:0">點一個數字：會先全關，2.5 秒後送出該開度。看閥門有沒有動，再按「有動／沒動」記錄。</p>
+    <p class="note" style="margin-top:0">點一個數字：會先全關，等閥門關到底再送出該開度。看閥門有沒有動，再按「有動／沒動」記錄。同一個數字可以重複測，格子下方會記「有動／沒動」各幾次。測試進行中點其他數字不會有反應。</p>
+    <div class="row" style="margin-bottom:10px">
+      <label class="note" style="flex:1 1 160px">全關後等幾秒再送<input type="number" id="testWait" min="1" max="20" step="1"></label>
+      <button class="btn warn" id="testClear" style="flex:0 0 auto">清除測試結果</button>
+    </div>
     <div class="testgrid" id="testGrid"></div>
     <div class="ask" id="ask">
       <div id="askTxt" style="margin-bottom:8px"></div>
-      <div class="row"><button class="btn pri" id="askYes">有動</button><button class="btn" id="askNo">沒動</button></div>
+      <div class="row" id="askBtns"><button class="btn pri" id="askYes">有動</button><button class="btn" id="askNo">沒動</button><button class="btn" id="askAgain">不全關，再送一次</button></div>
     </div>
   </div>
 
@@ -251,7 +258,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03d";
+const VERSION = "2026-11-03e";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -264,6 +271,7 @@ const $ = id => document.getElementById(id);
 const DEFAULTS = {
   pct: [15, 30, 50, 70],
   holdMs: 800,
+  testWait: 5,
   active: "comfort",
   modes: [
     { id:"comfort", name:"舒適", up:[2200,2800,3400,4200,5000], down:[1900,2500,3100,3800,4600],
@@ -320,11 +328,14 @@ let vQueue = Promise.resolve();
 function valveSend(str, times = 1) {
   vQueue = vQueue.then(async () => {
     if (!valve.ch) throw new Error("控制器未連線");
+    const t0 = Date.now();
     for (let k = 0; k < times; k++) {
-      await bleWrite(valve.ch, enc(str));
+      // 寫入卡住時不要讓後面的指令全部排隊卡死
+      await Promise.race([bleWrite(valve.ch, enc(str)),
+        sleep(3000).then(() => { throw new Error("寫入超過 3 秒沒有回應"); })]);
       if (k < times - 1) await sleep(100);
     }
-    log("→ " + str);
+    log("→ " + str + (times > 1 ? " ×" + times : "") + "（" + (Date.now() - t0) + " ms）");
     return true;
   }).catch(e => { log("寫入失敗：" + errText(e)); return false; });
   return vQueue;
@@ -349,15 +360,8 @@ async function openValve() {
   const srv = await valve.dev.gatt.connect();
   const svc = await srv.getPrimaryService(U("ffe1"));
   valve.ch = await svc.getCharacteristic(U("ffe3"));
-  try {
-    const n = await svc.getCharacteristic(U("ffe2"));
-    let last = 0;
-    n.addEventListener("characteristicvaluechanged", e => {
-      const now = Date.now(); if (now - last < 2000) return; last = now;
-      log("← " + new TextDecoder().decode(e.target.value));
-    });
-    await n.startNotifications();
-  } catch (e) {}
+  // 不訂閱 FFE2：控制器約每 30ms 送一次固定內容的心跳（見 PROTOCOL.md），
+  // 沒有資訊量，在 Bluefy 上每則通知都要經過原生↔網頁橋接，會拖慢整個網頁
   valve.connected = true; applied = -1; renderConn();
   log("控制器已連線：" + (valve.dev.name || ""));
   keepAwake();
@@ -606,33 +610,61 @@ function renderPct() {
   });
 }
 const TESTS = [5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,99];
+// results[v] = { y: 有動次數, n: 沒動次數 }；舊版存的是 true/false
 let results = {}; try { results = JSON.parse(localStorage.getItem("valveTests")) || {}; } catch (e) {}
-let testing = null;
+for (const k in results) if (typeof results[k] === "boolean") results[k] = { y: results[k] ? 1 : 0, n: results[k] ? 0 : 1 };
+const saveResults = () => { try { localStorage.setItem("valveTests", JSON.stringify(results)); } catch (e) {} };
+if (!(S.testWait >= 1)) S.testWait = 5;
+$("testWait").value = S.testWait;
+$("testWait").oninput = () => { const v = +$("testWait").value; if (v >= 1 && v <= 20) { S.testWait = v; save(); } };
+let testing = null, testBusy = false;
+
 function renderTests() {
-  const g = $("testGrid"); g.innerHTML = "";
+  const g = $("testGrid"); g.innerHTML = ""; g.classList.toggle("busy", testBusy);
   TESTS.forEach(v => {
+    const r = results[v] || { y:0, n:0 };
     const b = document.createElement("button");
-    b.textContent = v; b.className = results[v] === true ? "yes" : results[v] === false ? "no" : "";
-    b.onclick = async () => {
-      if (!valve.connected) { log("請先連接控制器"); return; }
-      auto = false; renderAuto();
-      testing = v; $("ask").classList.remove("show");
-      await valveSend(CMD_CLOSE, 2); await sleep(2500);
-      await valveSend(pctCmd(v));
-      $("askTxt").textContent = `剛送出 ${pctCmd(v)}（約 ${Math.round(v*0.9)}°），閥門有動嗎？`;
-      $("ask").classList.add("show");
-    };
+    b.innerHTML = v + (r.y || r.n ? `<small>${r.y}✓ ${r.n}✗</small>` : "");
+    b.className = r.y && r.n ? "mix" : r.y ? "yes" : r.n ? "no" : "";
+    b.onclick = () => runTest(v);
     g.appendChild(b);
   });
 }
+function showAsk(txt, buttons) {
+  $("askTxt").textContent = txt; $("askBtns").style.display = buttons ? "" : "none";
+  $("ask").classList.add("show");
+}
+async function runTest(v) {
+  if (testBusy) { log("測試進行中，請等這一輪結束"); return; }
+  if (!valve.connected) { log("請先連接控制器"); return; }
+  auto = false; renderAuto();
+  testBusy = true; testing = v; renderTests();
+  try {
+    showAsk("全關中…", false);
+    if (!await valveSend(CMD_CLOSE, 2)) { showAsk("全關指令送不出去，看紀錄的錯誤訊息", false); return; }
+    for (let k = S.testWait; k > 0; k--) { showAsk(`全關中，${k} 秒後送出 ${pctCmd(v)}…`, false); await sleep(1000); }
+    if (!await valveSend(pctCmd(v))) { showAsk("指令送不出去，看紀錄的錯誤訊息", false); return; }
+    showAsk(`剛送出 ${pctCmd(v)}（約 ${Math.round(v*0.9)}°），閥門有動嗎？`, true);
+  } finally { testBusy = false; renderTests(); }
+}
 const mark = ok => {
-  if (testing == null) return; results[testing] = ok;
-  try { localStorage.setItem("valveTests", JSON.stringify(results)); } catch (e) {}
-  log(`測試 ${testing}%：${ok ? "有動" : "沒動"}`);
+  if (testing == null) return;
+  const r = results[testing] || (results[testing] = { y:0, n:0 });
+  ok ? r.y++ : r.n++; saveResults();
+  log(`測試 ${testing}%：${ok ? "有動" : "沒動"}（累計 ${r.y}✓ ${r.n}✗）`);
   testing = null; $("ask").classList.remove("show"); renderTests();
 };
 $("askYes").onclick = () => mark(true);
 $("askNo").onclick = () => mark(false);
+$("askAgain").onclick = async () => {
+  if (testing == null || testBusy) return;
+  log(`${testing}%：不全關，再送一次`);
+  await valveSend(pctCmd(testing));
+};
+$("testClear").onclick = () => {
+  if (!confirm("清除所有開度測試結果？")) return;
+  results = {}; saveResults(); renderTests(); log("已清除測試結果");
+};
 $("rawSend").onclick = () => { const v = $("rawCmd").value.trim(); if (v) { auto = false; renderAuto(); valveSend(v); } };
 document.querySelectorAll("[data-raw]").forEach(b => b.onclick = () => { auto = false; renderAuto(); valveSend(b.dataset.raw, 2); });
 
