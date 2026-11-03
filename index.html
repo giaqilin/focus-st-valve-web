@@ -277,7 +277,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03h";
+const VERSION = "2026-11-03i";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -458,12 +458,13 @@ async function connectObd() {
   await obd.n.startNotifications();
   log("OBD 已連線：" + (dev.name || "未命名") + "，服務 " + String(found.svc).slice(4, 8) + "，初始化中…");
   await elmLog("ATZ", 3000);
-  for (const c of ["ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"]) await elmLog(c);
+  // 直接指定 CAN 11bit 500k（Focus MK4 實測是協定 6），省掉自動偵測的 5 秒多
+  for (const c of ["ATE0", "ATL0", "ATS0", "ATH0", "ATSP6"]) await elmLog(c);
   let r = await elmLog("0100", 8000);
   if (!/4100/.test(r.replace(/\s/g, ""))) {
-    // 自動偵測沒找到車，直接指定 CAN 11bit 500k（Focus MK4 用的協定）
-    await elmLog("ATSP6");
-    r = await elmLog("0100", 8000);
+    // 協定 6 不通的話（換車或換 OBD），退回自動偵測
+    await elmLog("ATSP0");
+    r = await elmLog("0100", 10000);
   }
   await elmLog("ATDPN");
   obd.connected = true; obd.bad = 0; renderConn();
