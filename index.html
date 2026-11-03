@@ -40,9 +40,9 @@ section{display:none} section.act{display:block}
 .rpm{font-size:64px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
 .rpm small{font-size:16px;color:var(--muted);font-weight:600;margin-left:6px}
 .src{font-size:12px;color:var(--muted);margin-top:6px}
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:14px}
 .stat{background:var(--panel2);border-radius:10px;padding:8px 10px}
-.stat b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+.stat b{display:block;font-size:18px;font-variant-numeric:tabular-nums}
 .stat span{font-size:12px;color:var(--muted)}
 
 .levels{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
@@ -80,7 +80,11 @@ td input{padding:7px 8px}
 .cond{display:grid;grid-template-columns:28px 1fr;gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line)}
 .cond:last-child{border:0}
 .cond .fields{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:14px;color:var(--muted)}
-.cond .fields input,.cond .fields select{width:84px}
+.cond .fields input{width:84px}
+.cond .fields select{width:auto;min-width:120px}
+#bandBody td:first-child{width:96px}
+#bandBody td:last-child{width:1%;white-space:nowrap}
+#bandBody .btn{white-space:nowrap}
 .cond b{color:var(--text);display:block;margin-bottom:6px}
 .err{color:var(--bad);font-size:13px;min-height:1.2em}
 .note{font-size:13px;color:var(--muted)}
@@ -124,7 +128,8 @@ td input{padding:7px 8px}
       <div class="src" id="vSrc">沒有轉速資料：連接 OBD，或在下方開啟模擬</div>
       <div class="stats">
         <div class="stat"><b id="vSpd">—</b><span>車速 km/h</span></div>
-        <div class="stat"><b id="vThr">—</b><span>油門 %</span></div>
+        <div class="stat"><b id="vLoad">—</b><span>負載 %</span></div>
+        <div class="stat"><b id="vThr">—</b><span>節氣門 %</span></div>
         <div class="stat"><b id="vEct">—</b><span>水溫 °C</span></div>
       </div>
     </div>
@@ -154,7 +159,8 @@ td input{padding:7px 8px}
     </div>
     <label>轉速<input type="range" id="sRpm" min="0" max="7000" step="50" value="900"><output id="oRpm">900</output></label>
     <label>車速<input type="range" id="sSpd" min="0" max="200" step="1" value="0"><output id="oSpd">0</output></label>
-    <label>油門<input type="range" id="sThr" min="0" max="100" step="1" value="0"><output id="oThr">0</output></label>
+    <label>負載<input type="range" id="sLoad" min="0" max="100" step="1" value="20"><output id="oLoad">20</output></label>
+    <label>節氣門<input type="range" id="sThr" min="0" max="100" step="1" value="0"><output id="oThr">0</output></label>
     <label>水溫<input type="range" id="sEct" min="0" max="110" step="1" value="85"><output id="oEct">85</output></label>
   </div>
 </section>
@@ -172,35 +178,44 @@ td input{padding:7px 8px}
   </div>
 
   <div class="card mt">
-    <h2>轉速門檻</h2>
-    <p class="note" style="margin-top:0">轉速升到「進入」就往上一段；降到「退出」以下才往下一段。兩者錯開，閥門才不會在門檻附近來回抖。</p>
-    <p class="note">取消勾選的段數會被跳過，改用下面最近一個有勾的段。中間段之間互切時，控制器會先關到底再開（AME 也一樣），<b>每個模式只留一個中間段</b>，加速時就不會出現「關一下再開」。</p>
+    <h2>轉速區間 → 閥門開度</h2>
+    <p class="note" style="margin-top:0">由低到高設定轉速區間，每個區間選一個開度。轉速往下掉時，要比區間起點再低「回落緩衝」才會退回下一個區間，避免在邊界來回切。</p>
     <table>
-      <thead><tr><th>使用</th><th>段數</th><th>進入 ≥ rpm</th><th>退出 &lt; rpm</th></tr></thead>
-      <tbody id="thrBody"></tbody>
+      <thead><tr><th>轉速從</th><th>閥門開度</th><th></th></tr></thead>
+      <tbody id="bandBody"></tbody>
     </table>
+    <div class="row mt">
+      <button class="btn" id="bandAdd" style="flex:0 0 auto">＋ 新增區間</button>
+      <div class="fields note" style="flex:1 1 160px">回落緩衝 <input type="number" id="cHyst" step="50" min="0" style="width:84px"> rpm</div>
+    </div>
     <div class="note" id="thrSum" style="margin-top:10px;padding:10px;border-radius:10px;background:var(--panel2)"></div>
     <div class="err" id="thrErr"></div>
   </div>
 
   <div class="card mt">
     <h2>額外條件（依序套用，越下面優先權越高）</h2>
+    <p class="note" style="margin-top:0">「負載」是引擎電腦算的負載（OBD 0104）。渦輪車同樣轉速下，有沒有在踩、有沒有進增壓，負載差很多，比轉速更能分辨「在加速」還是「在巡航」。</p>
     <div class="cond">
-      <input type="checkbox" id="cBoost">
-      <div><b>油門加成</b><div class="fields">油門 ≥ <input type="number" id="cBoostThr">% 時，至少開到第 <select id="cBoostLv"></select> 段</div></div>
+      <input type="checkbox" id="cLoad">
+      <div><b>加速加成</b><div class="fields">負載 ≥ <input type="number" id="cLoadThr">% 時，至少開到 <select id="cLoadLv"></select></div></div>
+    </div>
+    <div class="cond">
+      <input type="checkbox" id="cCruise">
+      <div><b>巡航降噪</b><div class="fields">負載 &lt; <input type="number" id="cCruiseLoad">% 時，最多開到 <select id="cCruiseLv"></select></div></div>
     </div>
     <div class="cond">
       <input type="checkbox" id="cLow">
-      <div><b>低速限制</b><div class="fields">車速 &lt; <input type="number" id="cLowSpd"> km/h 時，最多開到第 <select id="cLowLv"></select> 段</div></div>
+      <div><b>低速限制</b><div class="fields">車速 &lt; <input type="number" id="cLowSpd"> km/h 時，最多開到 <select id="cLowLv"></select></div></div>
     </div>
     <div class="cond">
       <input type="checkbox" id="cCold">
-      <div><b>冷車限制</b><div class="fields">水溫 &lt; <input type="number" id="cColdT"> °C 時，最多開到第 <select id="cColdLv"></select> 段</div></div>
+      <div><b>冷車限制</b><div class="fields">水溫 &lt; <input type="number" id="cColdT"> °C 時，最多開到 <select id="cColdLv"></select></div></div>
     </div>
     <div class="cond">
       <input type="checkbox" checked disabled>
-      <div><b>模式上限</b><div class="fields">這個模式最多開到第 <select id="cMax"></select> 段</div></div>
+      <div><b>模式上限</b><div class="fields">這個模式最多開到 <select id="cMax"></select></div></div>
     </div>
+    <p class="note">負載條件會在負載回到門檻 ±10% 之外才解除，避免負載在門檻附近晃動時一直切換。</p>
   </div>
 
   <div class="card mt">
@@ -285,7 +300,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03l";
+const VERSION = "2026-11-03m";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -302,20 +317,37 @@ const DEFAULTS = {
   testWait: 5,
   active: "comfort",
   modes: [
-    { id:"comfort", name:"舒適", up:[2200,2800,3400,4200,5000], down:[1900,2500,3100,3800,4600],
-      boostOn:false, boostThr:80, boostLv:4, lowOn:true, lowSpd:15, lowLv:1, coldOn:true, coldT:60, coldLv:0, maxLv:5 },
-    { id:"sport", name:"運動", up:[1800,2400,3000,3600,4300], down:[1500,2100,2700,3300,4000],
-      boostOn:true, boostThr:70, boostLv:5, lowOn:false, lowSpd:15, lowLv:2, coldOn:true, coldT:50, coldLv:1, maxLv:5 },
-    { id:"track", name:"賽道", up:[1000,1500,2000,2500,3000], down:[800,1300,1800,2300,2800],
-      boostOn:true, boostThr:40, boostLv:5, lowOn:false, lowSpd:15, lowLv:5, coldOn:false, coldT:50, coldLv:5, maxLv:5 },
-    { id:"night", name:"深夜", up:[3000,9000,9000,9000,9000], down:[2700,8800,8800,8800,8800],
-      boostOn:false, boostThr:90, boostLv:1, lowOn:true, lowSpd:30, lowLv:0, coldOn:true, coldT:70, coldLv:0, maxLv:1 },
+    { id:"comfort", name:"舒適", bands:[{from:0,lv:0},{from:2800,lv:2},{from:4500,lv:5}], hyst:300,
+      loadOn:true, loadThr:80, loadLv:2, cruiseOn:true, cruiseLoad:30, cruiseLv:0,
+      lowOn:true, lowSpd:15, lowLv:0, coldOn:true, coldT:60, coldLv:0, maxLv:5 },
+    { id:"sport", name:"運動", bands:[{from:0,lv:0},{from:2200,lv:3},{from:3500,lv:5}], hyst:300,
+      loadOn:true, loadThr:70, loadLv:5, cruiseOn:false, cruiseLoad:25, cruiseLv:0,
+      lowOn:false, lowSpd:15, lowLv:0, coldOn:true, coldT:50, coldLv:0, maxLv:5 },
+    { id:"track", name:"賽道", bands:[{from:0,lv:0},{from:1300,lv:4},{from:2200,lv:5}], hyst:300,
+      loadOn:true, loadThr:50, loadLv:5, cruiseOn:false, cruiseLoad:20, cruiseLv:0,
+      lowOn:false, lowSpd:15, lowLv:5, coldOn:false, coldT:50, coldLv:5, maxLv:5 },
+    { id:"night", name:"深夜", bands:[{from:0,lv:0},{from:3000,lv:1}], hyst:300,
+      loadOn:false, loadThr:90, loadLv:1, cruiseOn:true, cruiseLoad:40, cruiseLv:0,
+      lowOn:true, lowSpd:30, lowLv:0, coldOn:true, coldT:70, coldLv:0, maxLv:1 },
   ],
 };
 const clone = o => JSON.parse(JSON.stringify(o));
 let S;
 try { S = JSON.parse(localStorage.getItem("valveSettings")) || clone(DEFAULTS); } catch (e) { S = clone(DEFAULTS); }
 if (!S.modes || !S.modes.length) S = clone(DEFAULTS);
+// 舊版（每段一組進入／退出門檻）轉成轉速區間，保留車主調過的數字
+S.modes.forEach(m => {
+  if (Array.isArray(m.bands)) return;
+  const use = Array.isArray(m.use) ? m.use : [];
+  m.bands = [{ from:0, lv:0 }];
+  for (let k = 1; k <= 5; k++)
+    if ((k === 5 || use[k-1] !== false) && m.up && m.up[k-1] < 8000) m.bands.push({ from: m.up[k-1], lv: k });
+  const gaps = (m.up || []).map((u, i) => u - m.down[i]).filter(g => g > 0 && g < 2000);
+  m.hyst = gaps.length ? Math.round(gaps.reduce((x, y) => x + y) / gaps.length / 50) * 50 : 300;
+  m.loadOn = !!m.boostOn; m.loadThr = m.boostThr ?? 80; m.loadLv = m.boostLv ?? 5;
+  m.cruiseOn = false; m.cruiseLoad = 30; m.cruiseLv = 0;
+  delete m.up; delete m.down; delete m.use; delete m.boostOn; delete m.boostThr; delete m.boostLv;
+});
 const save = () => { try { localStorage.setItem("valveSettings", JSON.stringify(S)); } catch (e) {} };
 const mode = () => S.modes.find(m => m.id === S.active) || S.modes[0];
 
@@ -411,7 +443,7 @@ const ELM_SPECS = [
   { svc:"e7810a71-73ae-499d-8c15-faa9aef0c3f2", w:"bef8d6c9-9c21-4c9e-b632-bd58c1009f9f", n:"bef8d6c9-9c21-4c9e-b632-bd58c1009f9f" },
 ];
 const obd = { dev:null, w:null, n:null, connected:false, buf:"", resolve:null, lock:Promise.resolve(), last:0 };
-const data = { rpm:null, spd:null, thr:null, ect:null };
+const data = { rpm:null, spd:null, load:null, thr:null, ect:null };
 
 function elm(cmd, timeout = 1500) {
   obd.lock = obd.lock.then(() => new Promise(async res => {
@@ -481,19 +513,26 @@ async function connectObd() {
   pollObd();
 }
 async function pollObd() {
-  const extra = ["010D", "0111", "0105"]; let k = 0;
+  // 轉速每兩次讀一次、負載每四次讀一次，其他的輪流讀
+  const extra = ["010D", "0111", "0105"]; let k = 0, step = 0;
+  const one = async c => {
+    const r = await elm(c);
+    if (c === "010C") {
+      const a = pid(r, "0C", 2);
+      if (a) { data.rpm = Math.round((a[0]*256 + a[1]) / 4); obd.last = Date.now(); obd.bad = 0; }
+      else if (obd.bad++ % 25 === 0) log("OBD 010C 讀不到轉速，回應：" + (r ? show(r) : "（沒有回應）"));
+      return;
+    }
+    const b = pid(r, c.slice(2), 1); if (!b) return;
+    if (c === "0104") data.load = Math.round(b[0] * 100 / 255);
+    if (c === "010D") data.spd = b[0];
+    if (c === "0111") data.thr = Math.round(b[0] * 100 / 255);
+    if (c === "0105") data.ect = b[0] - 40;
+  };
   while (obd.connected) {
     if (obd.pause) { await sleep(200); continue; }
-    const r = await elm("010C");
-    const a = pid(r, "0C", 2);
-    if (a) { data.rpm = Math.round((a[0]*256 + a[1]) / 4); obd.last = Date.now(); obd.bad = 0; }
-    else if (obd.bad++ % 25 === 0) log("OBD 010C 讀不到轉速，回應：" + (r ? show(r) : "（沒有回應）"));
-    const c = extra[k++ % 3], r2 = await elm(c), b = pid(r2, c.slice(2), 1);
-    if (b) {
-      if (c === "010D") data.spd = b[0];
-      if (c === "0111") data.thr = Math.round(b[0] * 100 / 255);
-      if (c === "0105") data.ect = b[0] - 40;
-    }
+    const seq = step++ % 4;
+    await one(seq === 0 || seq === 2 ? "010C" : seq === 1 ? "0104" : extra[k++ % 3]);
   }
 }
 
@@ -506,25 +545,28 @@ function source() {
   return null;
 }
 function inputs() {
-  if (source() === "sim") return { rpm:+$("sRpm").value, spd:+$("sSpd").value, thr:+$("sThr").value, ect:+$("sEct").value };
+  if (source() === "sim") return { rpm:+$("sRpm").value, spd:+$("sSpd").value, load:+$("sLoad").value, thr:+$("sThr").value, ect:+$("sEct").value };
   return { ...data };
 }
+let loadBoost = false, cruising = false;
 function compute(d, m) {
-  let b = base;
-  while (b < 5 && d.rpm >= m.up[b]) b++;
-  while (b > 0 && d.rpm < m.down[b-1]) b--;
-  base = b;
-  let t = b; const w = [];
-  if (m.boostOn && d.thr != null && d.thr >= m.boostThr && t < m.boostLv) { t = m.boostLv; w.push("油門加成"); }
+  const bands = m.bands, hy = m.hyst >= 0 ? m.hyst : 300;
+  let i = Math.min(base, bands.length - 1);
+  while (i < bands.length - 1 && d.rpm >= bands[i+1].from) i++;
+  while (i > 0 && d.rpm < bands[i].from - hy) i--;
+  base = i;
+  let t = bands[i].lv; const w = [];
+  // 負載條件加上 ±10% 遲滯
+  if (d.load == null) { loadBoost = cruising = false; }
+  else {
+    loadBoost = loadBoost ? d.load >= m.loadThr - 10 : d.load >= m.loadThr;
+    cruising = cruising ? d.load < m.cruiseLoad + 10 : d.load < m.cruiseLoad;
+  }
+  if (m.loadOn && loadBoost && t < m.loadLv) { t = m.loadLv; w.push("加速加成"); }
+  if (m.cruiseOn && cruising && t > m.cruiseLv) { t = m.cruiseLv; w.push("巡航降噪"); }
   if (m.lowOn && d.spd != null && d.spd < m.lowSpd && t > m.lowLv) { t = m.lowLv; w.push("低速限制"); }
   if (m.coldOn && d.ect != null && d.ect < m.coldT && t > m.coldLv) { t = m.coldLv; w.push("冷車限制"); }
   if (t > m.maxLv) { t = m.maxLv; w.push("模式上限"); }
-  // 停用的中間段往下找最近一個有啟用的段
-  const use = Array.isArray(m.use) ? m.use : [];
-  if (t >= 1 && t <= 4 && use[t-1] === false) {
-    while (t >= 1 && t <= 4 && use[t-1] === false) t--;
-    w.push("跳過停用段");
-  }
   return { t, w };
 }
 function setLevel(i) {
@@ -569,6 +611,7 @@ function renderDash(src, d) {
   $("vRpm").textContent = src ? f(d.rpm) : "—";
   $("vSpd").textContent = src ? f(d.spd) : "—";
   $("vThr").textContent = src ? f(d.thr) : "—";
+  $("vLoad").textContent = src ? f(d.load) : "—";
   $("vEct").textContent = src ? f(d.ect) : "—";
   $("vSrc").textContent = src === "obd" ? "資料來源：OBD" : src === "sim" ? "資料來源：模擬" : (obd.connected ? "等待 OBD 回應…" : "沒有轉速資料：連接 OBD，或在下方開啟模擬");
   document.querySelectorAll(".lv").forEach(b => {
@@ -580,7 +623,7 @@ function renderDash(src, d) {
   $("vWhy").textContent = !auto ? "手動模式" : !valve.connected ? "控制器未連線" : !src ? "等待轉速資料" : why.length ? "套用：" + why.join("、") : "";
 }
 function renderModeChips() {
-  for (const [id, onPick] of [["modeChips", m => { S.active = m.id; save(); renderModeChips(); }],
+  for (const [id, onPick] of [["modeChips", m => { S.active = m.id; base = 0; save(); renderModeChips(); }],
                               ["editChips", m => { editId = m.id; renderModeChips(); renderEditor(); }]]) {
     const el = $(id); el.innerHTML = "";
     const cur = id === "modeChips" ? S.active : editId;
@@ -595,48 +638,54 @@ function renderModeChips() {
 /* ---------- 模式編輯 ---------- */
 let editId = S.active;
 const em = () => S.modes.find(m => m.id === editId) || S.modes[0];
-function lvOptions(sel) { sel.innerHTML = ""; for (let i = 0; i <= 5; i++) sel.add(new Option(i === 0 ? "0（全關）" : i === 5 ? "5（全開）" : String(i), i)); }
-["cBoostLv", "cLowLv", "cColdLv", "cMax"].forEach(id => lvOptions($(id)));
+const lvName = i => i === 0 ? "全關" : i === 5 ? "全開" : `第${i}段 ${levelAngle(i)}`;
+function lvOptions(sel) { const v = sel.value; sel.innerHTML = ""; for (let i = 0; i <= 5; i++) sel.add(new Option(lvName(i), i)); if (v !== "") sel.value = v; }
+const LV_SELECTS = ["cLoadLv", "cCruiseLv", "cLowLv", "cColdLv", "cMax"];
+LV_SELECTS.forEach(id => lvOptions($(id)));
 
-// 把停用段算進去之後，實際的切換點
 function renderThrSum(m) {
-  const use = Array.isArray(m.use) ? m.use : [];
-  const on = [0]; for (let k = 1; k <= 5; k++) if (k === 5 || use[k-1] !== false) on.push(k);
-  const lines = [];
-  for (let j = 1; j < on.length; j++) {
-    const a = on[j-1], k = on[j];
-    lines.push(`${levelLabel(a)} → <b>${levelLabel(k)}</b>：轉速 ≥ <b>${m.up[k-1]}</b>，降到 &lt; ${m.down[k-1]} 退回${levelLabel(a)}`);
-  }
-  $("thrSum").innerHTML = "<b>實際切換點</b>（還沒套用油門、低速、冷車、上限）<br>" + lines.join("<br>");
+  const bs = m.bands, hy = m.hyst >= 0 ? m.hyst : 300, lines = [], warn = [];
+  bs.forEach((x, i) => {
+    lines.push(`${bs[i+1] ? `${x.from}～${bs[i+1].from} rpm` : `${x.from} rpm 以上`}：<b>${lvName(x.lv)}</b>`);
+    if (i && x.lv >= 1 && x.lv <= 4 && bs[i-1].lv >= 1 && bs[i-1].lv <= 4 && x.lv !== bs[i-1].lv)
+      warn.push(`${lvName(bs[i-1].lv)} 和 ${lvName(x.lv)} 都是中間段，在 ${x.from} rpm 切換時閥門會先關再開`);
+  });
+  $("thrSum").innerHTML = "<b>這個模式的轉速對照</b>（還沒套用額外條件）<br>" + lines.join("<br>") +
+    `<br>往下掉時，要低於區間起點 ${hy} rpm 才退回` +
+    (warn.length ? `<br><span style="color:var(--accent)">⚠️ ${warn.join("<br>⚠️ ")}</span>` : "");
 }
 function validate(m) {
-  for (let i = 0; i < 5; i++) {
-    if (!(m.down[i] < m.up[i])) return `第 ${i+1} 段的「退出」要小於「進入」`;
-    if (i && !(m.up[i] > m.up[i-1])) return `第 ${i+1} 段的「進入」要大於第 ${i} 段`;
+  const bs = m.bands;
+  if (!bs.length || bs[0].from !== 0) return "第一個區間要從 0 rpm 開始";
+  for (let i = 1; i < bs.length; i++) {
+    if (!(bs[i].from > bs[i-1].from)) return `第 ${i+1} 個區間的轉速要大於第 ${i} 個（${bs[i-1].from}）`;
+    if (bs[i].from - (m.hyst || 0) <= bs[i-1].from) return `第 ${i+1} 個區間太窄，要比上一個區間多出「回落緩衝」以上`;
   }
   return "";
 }
 function renderEditor() {
   const m = em();
   $("mName").value = m.name;
-  const tb = $("thrBody"); tb.innerHTML = "";
-  if (!Array.isArray(m.use)) m.use = [true, true, true, true];
-  for (let i = 0; i < 5; i++) {
+  const tb = $("bandBody"); tb.innerHTML = "";
+  const check = () => { const e = validate(m); $("thrErr").textContent = e; if (!e) save(); renderThrSum(m); };
+  m.bands.forEach((x, i) => {
     const tr = document.createElement("tr");
-    const on = i === 4 || m.use[i] !== false;
-    tr.style.opacity = on ? "" : ".45";
-    tr.innerHTML = `<td>${i < 4 ? `<input type="checkbox" data-use="${i}" ${on ? "checked" : ""}>` : `<input type="checkbox" checked disabled>`}</td>
-      <td>${levelLabel(i+1)}<br><small class="note">${levelAngle(i+1)}</small></td>
-      <td><input type="number" step="50" data-k="up" data-i="${i}" value="${m.up[i]}"></td>
-      <td><input type="number" step="50" data-k="down" data-i="${i}" value="${m.down[i]}"></td>`;
+    tr.innerHTML = `<td><input type="number" step="100" min="0" value="${x.from}" ${i ? "" : "disabled"}></td>
+      <td><select></select></td>
+      <td>${i ? '<button class="btn warn" style="padding:6px 10px">刪除</button>' : ""}</td>`;
+    const inp = tr.querySelector("input"), sel = tr.querySelector("select"), del = tr.querySelector("button");
+    lvOptions(sel); sel.value = x.lv;
+    inp.oninput = () => { x.from = +inp.value; check(); };
+    sel.onchange = () => { x.lv = +sel.value; check(); };
+    if (del) del.onclick = () => { m.bands.splice(i, 1); check(); renderEditor(); };
     tb.appendChild(tr);
-  }
-  tb.querySelectorAll("[data-use]").forEach(cb => cb.onchange = () => { m.use[+cb.dataset.use] = cb.checked; save(); renderEditor(); });
-  tb.querySelectorAll("input[data-k]").forEach(inp => inp.oninput = () => {
-    m[inp.dataset.k][+inp.dataset.i] = +inp.value;
-    const e = validate(m); $("thrErr").textContent = e; if (!e) save();
-    renderThrSum(m);
   });
+  $("cHyst").value = m.hyst >= 0 ? m.hyst : 300;
+  $("cHyst").oninput = () => { m.hyst = Math.max(0, +$("cHyst").value || 0); check(); };
+  $("bandAdd").onclick = () => {
+    const last = m.bands[m.bands.length - 1];
+    m.bands.push({ from: last.from + 500, lv: 5 }); check(); renderEditor();
+  };
   $("thrErr").textContent = validate(m);
   renderThrSum(m);
   const bind = (id, key, num = true, chk = false) => {
@@ -644,7 +693,8 @@ function renderEditor() {
     if (chk) { el.checked = !!m[key]; el.onchange = () => { m[key] = el.checked; save(); }; }
     else { el.value = m[key]; el.oninput = el.onchange = () => { m[key] = num ? +el.value : el.value; save(); }; }
   };
-  bind("cBoost", "boostOn", true, true); bind("cBoostThr", "boostThr"); bind("cBoostLv", "boostLv");
+  bind("cLoad", "loadOn", true, true); bind("cLoadThr", "loadThr"); bind("cLoadLv", "loadLv");
+  bind("cCruise", "cruiseOn", true, true); bind("cCruiseLoad", "cruiseLoad"); bind("cCruiseLv", "cruiseLv");
   bind("cLow", "lowOn", true, true); bind("cLowSpd", "lowSpd"); bind("cLowLv", "lowLv");
   bind("cCold", "coldOn", true, true); bind("cColdT", "coldT"); bind("cColdLv", "coldLv");
   bind("cMax", "maxLv");
@@ -777,7 +827,7 @@ function renderAuto() { $("autoSw").classList.toggle("on", auto); }
 function renderSim() { $("simSw").classList.toggle("on", sim); renderConn(); }
 $("autoBtn").onclick = () => { auto = !auto; renderAuto(); if (auto) applied = -1; };
 $("simBtn").onclick = () => { sim = !sim; renderSim(); };
-[["sRpm","oRpm"],["sSpd","oSpd"],["sThr","oThr"],["sEct","oEct"]].forEach(([s,o]) => $(s).oninput = () => { $(o).textContent = $(s).value; });
+[["sRpm","oRpm"],["sSpd","oSpd"],["sLoad","oLoad"],["sThr","oThr"],["sEct","oEct"]].forEach(([s,o]) => $(s).oninput = () => { $(o).textContent = $(s).value; });
 
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("act", x === b));
