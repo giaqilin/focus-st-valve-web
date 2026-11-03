@@ -251,7 +251,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03a";
+const VERSION = "2026-11-03b";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -286,6 +286,17 @@ const levelAngle = i => i === 0 ? "0°" : i === 5 ? "90°" : Math.round(S.pct[i-
 const levelCmd = i => i === 0 ? CMD_CLOSE : i === 5 ? CMD_OPEN : pctCmd(S.pct[i-1]);
 
 /* ---------- 紀錄 ---------- */
+// Bluefy 丟出的錯誤不一定有 message，盡量把能看的資訊都印出來
+function errText(e) {
+  if (e == null) return "（沒有錯誤內容）";
+  if (typeof e !== "object") return String(e);
+  const parts = [e.name, e.message, e.code != null ? "code " + e.code : ""].filter(Boolean);
+  if (parts.length) return parts.join("：");
+  try { const j = JSON.stringify(e); if (j && j !== "{}") return j; } catch (x) {}
+  return String(e);
+}
+const isCancel = e => e && (e.name === "NotFoundError" || /cancel/i.test(e.message || String(e)));
+
 function log(msg) {
   const el = $("log"), t = new Date().toTimeString().slice(0, 8);
   el.textContent = (t + "  " + msg + "\n" + el.textContent).slice(0, 8000);
@@ -313,7 +324,7 @@ function valveSend(str, times = 1) {
     }
     log("→ " + str);
     return true;
-  }).catch(e => { log("寫入失敗：" + (e && e.message || e)); return false; });
+  }).catch(e => { log("寫入失敗：" + errText(e)); return false; });
   return vQueue;
 }
 
@@ -630,11 +641,13 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
 
 $("pillValve").onclick = async () => {
   if (valve.connected) return;
-  try { await connectValve(); } catch (e) { if (e.name !== "NotFoundError") log("連線失敗：" + e.message); }
+  try { await connectValve(); }
+  catch (e) { log(isCancel(e) ? "沒有選到控制器（取消，或附近找不到）" : "連線失敗：" + errText(e)); }
 };
 $("pillObd").onclick = async () => {
   if (obd.connected) return;
-  try { await connectObd(); } catch (e) { if (e.name !== "NotFoundError") log("OBD 連線失敗：" + e.message); }
+  try { await connectObd(); }
+  catch (e) { log(isCancel(e) ? "沒有選到 OBD（取消，或附近找不到）" : "OBD 連線失敗：" + errText(e)); }
 };
 
 function renderAll() { renderConn(); renderLevels(); renderModeChips(); renderEditor(); renderPct(); renderTests(); renderAuto(); renderSim(); }
