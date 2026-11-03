@@ -253,6 +253,20 @@ td input{padding:7px 8px}
   </div>
 
   <div class="card mt">
+    <h2>OBD 指令（只讀資料）</h2>
+    <p class="note" style="margin-top:0">送一個指令給 OBD，回應會寫在下方紀錄。送的時候會暫停自動讀轉速。</p>
+    <div class="row">
+      <input id="obdCmd" placeholder="例如 010C" style="flex:3" autocapitalize="characters" autocorrect="off" spellcheck="false">
+      <button class="btn pri" id="obdSend">送出</button>
+    </div>
+    <div class="row mt">
+      <button class="btn" data-obd="010C">轉速 010C</button>
+      <button class="btn" data-obd="ATDPN">協定 ATDPN</button>
+      <button class="btn" data-obd="ATRV">電壓 ATRV</button>
+    </div>
+  </div>
+
+  <div class="card mt">
     <h2>紀錄</h2>
     <div class="log" id="log"></div>
   </div>
@@ -263,7 +277,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03g";
+const VERSION = "2026-11-03h";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -405,6 +419,12 @@ function onElmData(e) {
   obd.buf += new TextDecoder().decode(e.target.value);
   if (obd.buf.includes(">") && obd.resolve) { const r = obd.buf; obd.buf = ""; const f = obd.resolve; obd.resolve = null; f(r); }
 }
+const show = r => JSON.stringify((r || "").replace(/\r/g, "⏎").replace(/\n/g, "")) ;
+async function elmLog(cmd, timeout) {
+  const t0 = Date.now(), r = await elm(cmd, timeout);
+  log("OBD " + cmd + " → " + (r ? show(r) : "（沒有回應）") + "（" + (Date.now() - t0) + " ms）");
+  return r;
+}
 function pid(resp, p, n) {
   const s = resp.replace(/[\s>]/g, "").toUpperCase(), i = s.indexOf("41" + p);
   if (i < 0) return null;
@@ -424,7 +444,7 @@ async function connectObd() {
   for (const sp of ELM_SPECS) {
     try {
       const svc = await srv.getPrimaryService(sp.svc);
-      found = { w: await svc.getCharacteristic(sp.w), n: await svc.getCharacteristic(sp.n) }; break;
+      found = { w: await svc.getCharacteristic(sp.w), n: await svc.getCharacteristic(sp.n), svc: sp.svc }; break;
     } catch (e) {}
   }
   if (!found) {
@@ -436,20 +456,29 @@ async function connectObd() {
   obd.w = found.w; obd.n = found.n;
   obd.n.addEventListener("characteristicvaluechanged", onElmData);
   await obd.n.startNotifications();
-  log("OBD 已連線，初始化中…");
-  await elm("ATZ", 3000);
-  for (const c of ["ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"]) await elm(c);
-  await elm("0100", 6000);
-  obd.connected = true; renderConn(); log("OBD 就緒");
+  log("OBD 已連線：" + (dev.name || "未命名") + "，服務 " + String(found.svc).slice(4, 8) + "，初始化中…");
+  await elmLog("ATZ", 3000);
+  for (const c of ["ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"]) await elmLog(c);
+  let r = await elmLog("0100", 8000);
+  if (!/4100/.test(r.replace(/\s/g, ""))) {
+    // 自動偵測沒找到車，直接指定 CAN 11bit 500k（Focus MK4 用的協定）
+    await elmLog("ATSP6");
+    r = await elmLog("0100", 8000);
+  }
+  await elmLog("ATDPN");
+  obd.connected = true; obd.bad = 0; renderConn();
+  log(/4100/.test(r.replace(/\s/g, "")) ? "OBD 就緒" : "OBD 已連線，但車子沒有正常回應（看上面幾行的回應內容）");
   keepAwake();
   pollObd();
 }
 async function pollObd() {
   const extra = ["010D", "0111", "0105"]; let k = 0;
   while (obd.connected) {
+    if (obd.pause) { await sleep(200); continue; }
     const r = await elm("010C");
     const a = pid(r, "0C", 2);
-    if (a) { data.rpm = Math.round((a[0]*256 + a[1]) / 4); obd.last = Date.now(); }
+    if (a) { data.rpm = Math.round((a[0]*256 + a[1]) / 4); obd.last = Date.now(); obd.bad = 0; }
+    else if (obd.bad++ % 25 === 0) log("OBD 010C 讀不到轉速，回應：" + (r ? show(r) : "（沒有回應）"));
     const c = extra[k++ % 3], r2 = await elm(c), b = pid(r2, c.slice(2), 1);
     if (b) {
       if (c === "010D") data.spd = b[0];
@@ -679,6 +708,14 @@ $("testClear").onclick = () => {
 };
 $("rawSend").onclick = () => { const v = $("rawCmd").value.trim(); if (v) { auto = false; renderAuto(); valveSend(v); } };
 document.querySelectorAll("[data-raw]").forEach(b => b.onclick = () => { auto = false; renderAuto(); valveSend(b.dataset.raw, 2); });
+
+async function obdManual(cmd) {
+  if (!obd.w) { log("請先連接 OBD"); return; }
+  obd.pause = true;
+  try { await elmLog(cmd.trim().toUpperCase(), 5000); } finally { obd.pause = false; }
+}
+$("obdSend").onclick = () => { const v = $("obdCmd").value; if (v.trim()) obdManual(v); };
+document.querySelectorAll("[data-obd]").forEach(b => b.onclick = () => obdManual(b.dataset.obd));
 
 /* ---------- 其他 ---------- */
 let wakeLock = null;
