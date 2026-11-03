@@ -179,6 +179,7 @@ td input{padding:7px 8px}
       <thead><tr><th>使用</th><th>段數</th><th>進入 ≥ rpm</th><th>退出 &lt; rpm</th></tr></thead>
       <tbody id="thrBody"></tbody>
     </table>
+    <div class="note" id="thrSum" style="margin-top:10px;padding:10px;border-radius:10px;background:var(--panel2)"></div>
     <div class="err" id="thrErr"></div>
   </div>
 
@@ -284,7 +285,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03k";
+const VERSION = "2026-11-03l";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -597,6 +598,17 @@ const em = () => S.modes.find(m => m.id === editId) || S.modes[0];
 function lvOptions(sel) { sel.innerHTML = ""; for (let i = 0; i <= 5; i++) sel.add(new Option(i === 0 ? "0（全關）" : i === 5 ? "5（全開）" : String(i), i)); }
 ["cBoostLv", "cLowLv", "cColdLv", "cMax"].forEach(id => lvOptions($(id)));
 
+// 把停用段算進去之後，實際的切換點
+function renderThrSum(m) {
+  const use = Array.isArray(m.use) ? m.use : [];
+  const on = [0]; for (let k = 1; k <= 5; k++) if (k === 5 || use[k-1] !== false) on.push(k);
+  const lines = [];
+  for (let j = 1; j < on.length; j++) {
+    const a = on[j-1], k = on[j];
+    lines.push(`${levelLabel(a)} → <b>${levelLabel(k)}</b>：轉速 ≥ <b>${m.up[k-1]}</b>，降到 &lt; ${m.down[k-1]} 退回${levelLabel(a)}`);
+  }
+  $("thrSum").innerHTML = "<b>實際切換點</b>（還沒套用油門、低速、冷車、上限）<br>" + lines.join("<br>");
+}
 function validate(m) {
   for (let i = 0; i < 5; i++) {
     if (!(m.down[i] < m.up[i])) return `第 ${i+1} 段的「退出」要小於「進入」`;
@@ -623,8 +635,10 @@ function renderEditor() {
   tb.querySelectorAll("input[data-k]").forEach(inp => inp.oninput = () => {
     m[inp.dataset.k][+inp.dataset.i] = +inp.value;
     const e = validate(m); $("thrErr").textContent = e; if (!e) save();
+    renderThrSum(m);
   });
   $("thrErr").textContent = validate(m);
+  renderThrSum(m);
   const bind = (id, key, num = true, chk = false) => {
     const el = $(id);
     if (chk) { el.checked = !!m[key]; el.onchange = () => { m[key] = el.checked; save(); }; }
