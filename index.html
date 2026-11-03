@@ -29,7 +29,7 @@ header h1{font-size:18px;margin:0 auto 0 0;font-weight:700}
 .dot.on{background:var(--ok)} .dot.sim{background:var(--info)}
 
 nav{display:flex;gap:6px;margin-bottom:12px}
-nav button{flex:1;padding:10px;border-radius:10px;background:var(--panel);color:var(--muted);font-weight:600}
+nav button{flex:1;padding:10px 4px;border-radius:10px;background:var(--panel);color:var(--muted);font-weight:600}
 nav button.act{background:var(--panel2);color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
 section{display:none} section.act{display:block}
 
@@ -99,6 +99,9 @@ td input{padding:7px 8px}
 .log{background:#07090b;border:1px solid var(--line);border-radius:10px;padding:8px;font:12px/1.5 ui-monospace,Menlo,monospace;height:180px;overflow:auto;white-space:pre-wrap;color:#b8c2cc}
 .ask{display:none;margin-top:10px;padding:12px;border-radius:12px;background:var(--panel2);border:1px solid var(--accent)}
 .ask.show{display:block}
+.recsum td,.recsum th{font-variant-numeric:tabular-nums}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:-1px}
 .banner{display:none;background:#3d1219;border:1px solid var(--bad);color:#ffd5da;padding:10px 12px;border-radius:12px;margin-bottom:10px;font-size:14px}
 .banner.show{display:block}
 </style>
@@ -117,6 +120,7 @@ td input{padding:7px 8px}
 <nav>
   <button data-tab="dash" class="act">儀表</button>
   <button data-tab="modes">模式設定</button>
+  <button data-tab="drive">行車紀錄</button>
   <button data-tab="lab">實驗室</button>
 </nav>
 
@@ -235,6 +239,37 @@ td input{padding:7px 8px}
   </div>
 </section>
 
+<!-- ===== 行車紀錄 ===== -->
+<section id="drive">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">行車紀錄</h2>
+      <button class="toggle" id="recBtn" style="flex:0 0 auto">記錄<span class="sw" id="recSw"></span></button>
+    </div>
+    <p class="note">連上 OBD 就會自動記錄，每 0.5 秒一筆：轉速、負載、車速、節氣門、水溫、閥門目標和實際段數。存在這支手機裡，最多保留約 4 小時，超過會從最舊的開始刪。</p>
+    <div id="recStat" class="note"></div>
+    <div class="row mt">
+      <button class="btn pri" id="recShare">分享 CSV 檔</button>
+      <button class="btn" id="recCopy">複製 CSV</button>
+      <button class="btn warn" id="recClear" style="flex:0 0 auto">清除</button>
+    </div>
+  </div>
+
+  <div class="card mt">
+    <h2>摘要</h2>
+    <table class="recsum" id="recSum"></table>
+    <p class="note">怠速＝車速 0、轉速 1200 以下；巡航＝車速 40 以上、5 秒內車速變化 3 km/h 以內；加速＝5 秒內車速增加 3 km/h 以上。範圍是去掉最低和最高各 10% 之後的區間。</p>
+  </div>
+
+  <div class="card mt">
+    <h2>轉速 × 負載（點的顏色＝閥門實際段數）</h2>
+    <canvas id="recChart" style="width:100%;height:320px;display:block;touch-action:pan-y"></canvas>
+    <div class="legend" id="recLegend"></div>
+    <div class="note" id="recTip" style="min-height:1.4em;margin-top:6px">點圖上的點可以看那一筆的數值</div>
+    <p class="note">虛線是目前模式的設定：直線＝轉速區間的起點，橫線＝加速加成和巡航降噪的負載門檻。點落在哪一區，就知道那時候閥門為什麼是這個段數。</p>
+  </div>
+</section>
+
 <!-- ===== 實驗室 ===== -->
 <section id="lab">
   <div class="card">
@@ -300,7 +335,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03m";
+const VERSION = "2026-11-03n";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -575,8 +610,25 @@ function setLevel(i) {
 }
 // 目標段數要穩定一段時間才送出：一腳油門衝上去時直接切到最後那段，不要一路 1→2→3→4 每段都歸零一次
 let pendT = -1, pendSince = 0;
+/* ---------- 行車紀錄 ---------- */
+// 每筆：[時間 ms, 轉速, 負載, 車速, 節氣門, 水溫, 目標段, 實際段, 模式名稱]
+const REC_MAX = 30000;
+let rec = []; try { rec = JSON.parse(localStorage.getItem("valveRec")) || []; } catch (e) { rec = []; }
+let recLast = 0, recDirty = false, recSaved = Date.now();
+const recSave = () => { if (!recDirty) return; try { localStorage.setItem("valveRec", JSON.stringify(rec)); recDirty = false; recSaved = Date.now(); } catch (e) { log("行車紀錄存不進手機：" + errText(e)); } };
+function recPush(d, now) {
+  if (S.recOn === false || now - recLast < 500) return;
+  recLast = now;
+  rec.push([now, d.rpm, d.load ?? null, d.spd ?? null, d.thr ?? null, d.ect ?? null, target, applied, mode().name]);
+  if (rec.length > REC_MAX) rec.splice(0, rec.length - REC_MAX);
+  recDirty = true;
+  if (now - recSaved > 10000) recSave();
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "visible") recSave(); });
+
 function tick() {
   const src = source(), d = inputs(), now = Date.now();
+  if (src === "obd" && d.rpm != null) recPush(d, now);
   if (src && d.rpm != null) {
     const r = compute(d, mode()); target = r.t; why = r.w;
     if (target !== pendT) { pendT = target; pendSince = now; }
@@ -818,6 +870,114 @@ $("bgStart").onclick = () => {
 };
 document.addEventListener("visibilitychange", () => log("畫面切到" + (document.visibilityState === "visible" ? "前景" : "背景")));
 
+const LV_COLORS = ["#4a5260", "#7a4f14", "#a8691a", "#d4861f", "#f5a524", "#ffd27a"];
+const pctile = (arr, q) => { if (!arr.length) return null; const a = [...arr].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(q * a.length))]; };
+function recRange(xs) { return xs.length ? `${pctile(xs, .1)}～${pctile(xs, .9)}` : "—"; }
+function recAvg(xs) { return xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : "—"; }
+function renderRec() {
+  $("recSw").classList.toggle("on", S.recOn !== false);
+  // 總時間：相鄰兩筆間隔 5 秒內才算
+  let dur = 0, sw = 0, prevLv = null;
+  const groups = { idle:[], cruise:[], accel:[], all:[] }, lvTime = [0,0,0,0,0,0];
+  for (let i = 0; i < rec.length; i++) {
+    const r = rec[i], gap = i ? r[0] - rec[i-1][0] : 0;
+    if (i && gap < 5000) { dur += gap; if (rec[i-1][7] >= 0) lvTime[rec[i-1][7]] += gap; }
+    if (r[7] >= 0) { if (prevLv != null && r[7] !== prevLv) sw++; prevLv = r[7]; }
+    const [, rpm, load, spd] = r; if (load == null) continue;
+    groups.all.push(r);
+    if (spd === 0 && rpm < 1200) groups.idle.push(r);
+    // 往回找 5 秒前那筆
+    let j = i; while (j > 0 && r[0] - rec[j-1][0] <= 5200) j--;
+    const old = rec[j];
+    if (old && r[0] - old[0] >= 4000 && old[3] != null && spd != null) {
+      const dv = spd - old[3];
+      if (spd >= 40 && Math.abs(dv) <= 3) groups.cruise.push(r);
+      else if (dv >= 3) groups.accel.push(r);
+    }
+  }
+  const mins = dur / 60000;
+  $("recStat").innerHTML = rec.length
+    ? `共 <b>${rec.length}</b> 筆，約 <b>${mins.toFixed(1)}</b> 分鐘（${new Date(rec[0][0]).toLocaleString()} 起）。閥門切換 <b>${sw}</b> 次${mins >= 1 ? `，平均每分鐘 ${(sw / mins).toFixed(1)} 次` : ""}。`
+    : "還沒有紀錄。連上 OBD 開一段路就會開始記。";
+  const row = (name, g) => `<tr><td>${name}</td><td>${g.length}</td><td>${recAvg(g.map(r => r[2]))}</td><td>${recRange(g.map(r => r[2]))}</td><td>${recRange(g.map(r => r[1]))}</td></tr>`;
+  const maxOf = k => groups.all.length ? Math.max(...groups.all.map(r => r[k])) : "—";
+  $("recSum").innerHTML = `<thead><tr><th>情境</th><th>筆數</th><th>平均負載 %</th><th>負載範圍 %</th><th>轉速範圍</th></tr></thead><tbody>` +
+    row("怠速", groups.idle) + row("巡航", groups.cruise) + row("加速", groups.accel) + row("全部", groups.all) +
+    `<tr><td>最高</td><td></td><td>${maxOf(2)}</td><td></td><td>${maxOf(1)}</td></tr>` +
+    `<tr><td colspan="5" class="note">閥門時間占比：` + lvTime.map((t, i) => dur ? `${lvName(i)} ${Math.round(t * 100 / dur)}%` : "").filter(x => x && !/ 0%$/.test(x)).join("、") + `</td></tr></tbody>`;
+  $("recLegend").innerHTML = LV_COLORS.map((c, i) => `<span><i style="background:${c}"></i>${lvName(i)}</span>`).join("");
+  drawRecChart();
+}
+let chartPts = [];
+function drawRecChart() {
+  const cv = $("recChart"), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (!W) return;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
+  const L = 34, R = 8, T = 8, B = 26, pw = W - L - R, ph = H - T - B;
+  const X = rpm => L + Math.min(rpm, 7000) / 7000 * pw, Y = load => T + ph - Math.min(load, 100) / 100 * ph;
+  g.font = "11px -apple-system,sans-serif"; g.fillStyle = "#8a95a3"; g.strokeStyle = "#262d36"; g.lineWidth = 1;
+  for (let r = 0; r <= 7000; r += 1000) { g.beginPath(); g.moveTo(X(r), T); g.lineTo(X(r), T + ph); g.stroke(); g.textAlign = "center"; g.fillText(r ? r / 1000 + "k" : "0", X(r), H - 8); }
+  for (let l = 0; l <= 100; l += 20) { g.beginPath(); g.moveTo(L, Y(l)); g.lineTo(L + pw, Y(l)); g.stroke(); g.textAlign = "right"; g.fillText(l, L - 6, Y(l) + 4); }
+  g.textAlign = "left"; g.fillText("負載 %", L + 4, T + 12); g.textAlign = "right"; g.fillText("轉速 rpm", L + pw - 2, T + ph - 6);
+  // 目前模式的設定線
+  const m = mode(); g.setLineDash([4, 4]); g.strokeStyle = "#8a95a3";
+  m.bands.slice(1).forEach(b => { g.beginPath(); g.moveTo(X(b.from), T); g.lineTo(X(b.from), T + ph); g.stroke(); });
+  if (m.loadOn) { g.beginPath(); g.moveTo(L, Y(m.loadThr)); g.lineTo(L + pw, Y(m.loadThr)); g.stroke(); }
+  if (m.cruiseOn) { g.beginPath(); g.moveTo(L, Y(m.cruiseLoad)); g.lineTo(L + pw, Y(m.cruiseLoad)); g.stroke(); }
+  g.setLineDash([]);
+  // 點：最多畫 6000 筆，均勻抽樣
+  const pts = rec.filter(r => r[2] != null && r[1] != null), step = Math.max(1, Math.ceil(pts.length / 6000));
+  chartPts = [];
+  g.globalAlpha = .7;
+  for (let i = 0; i < pts.length; i += step) {
+    const r = pts[i], lv = r[7] >= 0 ? r[7] : 0, x = X(r[1]), y = Y(r[2]);
+    g.fillStyle = LV_COLORS[lv]; g.beginPath(); g.arc(x, y, 2.5, 0, 7); g.fill();
+    chartPts.push([x, y, r]);
+  }
+  g.globalAlpha = 1;
+}
+$("recChart").addEventListener("click", e => {
+  const b = $("recChart").getBoundingClientRect(), x = e.clientX - b.left, y = e.clientY - b.top;
+  let best = null, bd = 400;
+  for (const p of chartPts) { const dd = (p[0] - x) ** 2 + (p[1] - y) ** 2; if (dd < bd) { bd = dd; best = p[2]; } }
+  $("recTip").textContent = best
+    ? `${new Date(best[0]).toLocaleTimeString()}｜${best[1]} rpm｜負載 ${best[2]}%｜${best[3] ?? "—"} km/h｜節氣門 ${best[4] ?? "—"}%｜水溫 ${best[5] ?? "—"}°C｜目標 ${best[6] >= 0 ? lvName(best[6]) : "—"}｜實際 ${best[7] >= 0 ? lvName(best[7]) : "未知"}｜${best[8]}`
+    : "附近沒有點，再點靠近一點";
+});
+function recCsv() {
+  const head = "time,rpm,load_pct,speed_kmh,throttle_pct,coolant_c,target_level,applied_level,mode";
+  const pad = n => String(n).padStart(2, "0");
+  const ts = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, "0")}`; };
+  return [head].concat(rec.map(r => [ts(r[0]), ...r.slice(1, 8).map(v => v ?? ""), r[8]].join(","))).join("\n");
+}
+$("recBtn").onclick = () => { S.recOn = S.recOn === false; save(); renderRec(); log("行車紀錄：" + (S.recOn ? "開始記錄" : "暫停記錄")); };
+$("recShare").onclick = async () => {
+  recSave();
+  if (!rec.length) { log("還沒有行車紀錄"); return; }
+  const name = "valve-log-" + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "") + ".csv";
+  const file = new File([recCsv()], name, { type: "text/csv" });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
+  } catch (e) { if (e && e.name === "AbortError") return; log("分享失敗：" + errText(e) + "，改用下載"); }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+};
+$("recCopy").onclick = async () => {
+  const txt = recCsv();
+  try { await navigator.clipboard.writeText(txt); log(`已複製 ${rec.length} 筆行車紀錄`); }
+  catch (e) {
+    const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); log(`已複製 ${rec.length} 筆行車紀錄`); } catch (x) { log("複製失敗：" + errText(x)); }
+    ta.remove();
+  }
+};
+$("recClear").onclick = () => {
+  if (!confirm("清除所有行車紀錄？")) return;
+  rec = []; recDirty = true; recSave(); renderRec(); log("已清除行車紀錄");
+};
+setInterval(() => { if ($("drive").classList.contains("act")) renderRec(); }, 5000);
+window.addEventListener("resize", () => { if ($("drive").classList.contains("act")) drawRecChart(); });
+
 /* ---------- 其他 ---------- */
 let wakeLock = null;
 async function keepAwake() { try { if ("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {} }
@@ -832,6 +992,7 @@ $("simBtn").onclick = () => { sim = !sim; renderSim(); };
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("act", x === b));
   document.querySelectorAll("section").forEach(s => s.classList.toggle("act", s.id === b.dataset.tab));
+  if (b.dataset.tab === "drive") renderRec();
 });
 
 $("pillValve").onclick = async () => {
