@@ -267,6 +267,12 @@ td input{padding:7px 8px}
   </div>
 
   <div class="card mt">
+    <h2>背景執行測試</h2>
+    <p class="note" style="margin-top:0">按下開始後，網頁每 2 秒記一筆。接著切到別的 App 或鎖螢幕，1 分鐘後再回來，看紀錄中間有沒有斷掉。不用連任何裝置。</p>
+    <div class="row"><button class="btn pri" id="bgStart">開始 2 分鐘測試</button></div>
+  </div>
+
+  <div class="card mt">
     <h2>紀錄</h2>
     <div class="log" id="log"></div>
   </div>
@@ -277,7 +283,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03i";
+const VERSION = "2026-11-03j";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -717,6 +723,24 @@ async function obdManual(cmd) {
 }
 $("obdSend").onclick = () => { const v = $("obdCmd").value; if (v.trim()) obdManual(v); };
 document.querySelectorAll("[data-obd]").forEach(b => b.onclick = () => obdManual(b.dataset.obd));
+
+// 背景測試：記錄網頁在背景時計時器還有沒有在跑
+let bgTimer = null;
+$("bgStart").onclick = () => {
+  if (bgTimer) return;
+  const t0 = Date.now(); let last = t0, maxGap = 0, n = 0;
+  log("背景測試開始，請切到別的 App 或鎖螢幕，1 分鐘後再回來");
+  bgTimer = setInterval(() => {
+    const now = Date.now(), gap = now - last; last = now; n++;
+    if (gap > maxGap) maxGap = gap;
+    log(`背景測試 #${n}，距離上一筆 ${(gap/1000).toFixed(1)} 秒，畫面${document.visibilityState === "visible" ? "在前景" : "在背景"}`);
+    if (now - t0 >= 120000) {
+      clearInterval(bgTimer); bgTimer = null;
+      log(`背景測試結束：2 分鐘內記了 ${n} 筆（正常約 60 筆），最長間隔 ${(maxGap/1000).toFixed(1)} 秒`);
+    }
+  }, 2000);
+};
+document.addEventListener("visibilitychange", () => log("畫面切到" + (document.visibilityState === "visible" ? "前景" : "背景")));
 
 /* ---------- 其他 ---------- */
 let wakeLock = null;
