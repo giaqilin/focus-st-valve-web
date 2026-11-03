@@ -105,7 +105,7 @@ td input{padding:7px 8px}
 <div class="banner" id="noBle">這個瀏覽器不支援網頁藍牙。iPhone 請用 <b>Bluefy – Web BLE Browser</b> 開啟這個網頁（Safari 不支援）。</div>
 
 <header>
-  <h1>排氣閥門控制 <small id="ver" style="font-size:11px;color:var(--muted);font-weight:500"></small></h1>
+  <h1>排氣閥門控制 <small id="ver" style="font-size:11px;color:var(--muted);font-weight:500"></small> <button id="upd" style="font-size:11px;padding:3px 8px;border-radius:999px;background:var(--panel2);color:var(--muted)">更新網頁</button></h1>
   <button class="pill" id="pillValve"><span class="dot" id="dotValve"></span><span id="txtValve">連接控制器</span></button>
   <button class="pill" id="pillObd"><span class="dot" id="dotObd"></span><span id="txtObd">連接 OBD</span></button>
 </header>
@@ -258,7 +258,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03e";
+const VERSION = "2026-11-03f";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -699,6 +699,8 @@ function renderAll() { renderConn(); renderLevels(); renderModeChips(); renderEd
 if (!navigator.bluetooth) $("noBle").classList.add("show");
 log("網頁版本 " + VERSION);
 $("ver").textContent = VERSION;
+// Bluefy 快取很兇，用不同的網址參數強迫重新下載
+$("upd").onclick = () => location.replace(location.pathname + "?v=" + Date.now());
 (async () => {
   const b = navigator.bluetooth;
   let avail = "不支援查詢";
