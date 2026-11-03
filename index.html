@@ -203,6 +203,11 @@ td input{padding:7px 8px}
 
   <div class="card mt">
     <h2>切換節奏</h2>
+    <p class="note" style="margin-top:0">第 1～4 段每次切換，控制器都會先跑到底歸零再開到位置（約 0.5 秒、響兩聲）。下面兩個設定可以減少切換次數。</p>
+    <div class="cond">
+      <span></span>
+      <div class="fields">目標段數要維持 <input type="number" id="cStable" step="100" min="0"> 毫秒才切換（0＝馬上切）</div>
+    </div>
     <div class="cond" style="border:0">
       <span></span>
       <div class="fields">兩次切換之間至少間隔 <input type="number" id="cHold" step="100"> 毫秒</div>
@@ -258,7 +263,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03f";
+const VERSION = "2026-11-03g";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -271,6 +276,7 @@ const $ = id => document.getElementById(id);
 const DEFAULTS = {
   pct: [15, 30, 50, 70],
   holdMs: 800,
+  stableMs: 600,
   testWait: 5,
   active: "comfort",
   modes: [
@@ -481,11 +487,15 @@ function setLevel(i) {
   applied = i; lastSend = Date.now();
   valveSend(levelCmd(i), (i === 0 || i === 5) ? 2 : 1).then(ok => { if (!ok && applied === i) applied = -1; });
 }
+// 目標段數要穩定一段時間才送出：一腳油門衝上去時直接切到最後那段，不要一路 1→2→3→4 每段都歸零一次
+let pendT = -1, pendSince = 0;
 function tick() {
-  const src = source(), d = inputs();
+  const src = source(), d = inputs(), now = Date.now();
   if (src && d.rpm != null) {
     const r = compute(d, mode()); target = r.t; why = r.w;
-    if (auto && valve.connected && target !== applied && Date.now() - lastSend >= S.holdMs) setLevel(target);
+    if (target !== pendT) { pendT = target; pendSince = now; }
+    const stable = S.stableMs >= 0 ? S.stableMs : 600;
+    if (auto && valve.connected && target !== applied && now - pendSince >= stable && now - lastSend >= S.holdMs) setLevel(target);
   }
   renderDash(src, d);
 }
@@ -577,8 +587,10 @@ function renderEditor() {
   bind("cCold", "coldOn", true, true); bind("cColdT", "coldT"); bind("cColdLv", "coldLv");
   bind("cMax", "maxLv");
   $("cHold").value = S.holdMs;
+  $("cStable").value = S.stableMs >= 0 ? S.stableMs : 600;
 }
 $("cHold").oninput = () => { S.holdMs = Math.max(200, +$("cHold").value || 800); save(); };
+$("cStable").oninput = () => { const v = +$("cStable").value; S.stableMs = v >= 0 ? Math.min(v, 5000) : 600; save(); };
 $("mName").oninput = () => { em().name = $("mName").value || "未命名"; save(); renderModeChips(); };
 $("mAdd").onclick = () => {
   const m = clone(em()); m.id = "m" + Date.now(); m.name = m.name + " 複本";
