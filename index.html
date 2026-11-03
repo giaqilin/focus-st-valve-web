@@ -102,7 +102,7 @@ td input{padding:7px 8px}
 <div class="banner" id="noBle">這個瀏覽器不支援網頁藍牙。iPhone 請用 <b>Bluefy – Web BLE Browser</b> 開啟這個網頁（Safari 不支援）。</div>
 
 <header>
-  <h1>排氣閥門控制</h1>
+  <h1>排氣閥門控制 <small id="ver" style="font-size:11px;color:var(--muted);font-weight:500"></small></h1>
   <button class="pill" id="pillValve"><span class="dot" id="dotValve"></span><span id="txtValve">連接控制器</span></button>
   <button class="pill" id="pillObd"><span class="dot" id="dotObd"></span><span id="txtObd">連接 OBD</span></button>
 </header>
@@ -251,11 +251,13 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03b";
+const VERSION = "2026-11-03c";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
 const enc = s => new TextEncoder().encode(s);
+// 16-bit UUID 一律寫成完整 128-bit 字串，部分 iOS 網頁藍牙瀏覽器不接受數字格式
+const U = h => "0000" + h + "-0000-1000-8000-00805f9b34fb";
 const $ = id => document.getElementById(id);
 
 /* ---------- 設定 ---------- */
@@ -292,8 +294,8 @@ function errText(e) {
   if (typeof e !== "object") return String(e);
   const parts = [e.name, e.message, e.code != null ? "code " + e.code : ""].filter(Boolean);
   if (parts.length) return parts.join("：");
-  try { const j = JSON.stringify(e); if (j && j !== "{}") return j; } catch (x) {}
-  return String(e);
+  try { const j = JSON.stringify(e, Object.getOwnPropertyNames(e)); if (j && j !== "{}") return j; } catch (x) {}
+  return Object.prototype.toString.call(e) + " " + String(e);
 }
 const isCancel = e => e && (e.name === "NotFoundError" || /cancel/i.test(e.message || String(e)));
 
@@ -330,8 +332,8 @@ function valveSend(str, times = 1) {
 
 async function connectValve() {
   const dev = await navigator.bluetooth.requestDevice({
-    filters: [{ namePrefix: "AME" }, { services: [0xffe1] }],
-    optionalServices: [0xffe1],
+    filters: [{ namePrefix: "AME" }, { services: [U("ffe1")] }],
+    optionalServices: [U("ffe1")],
   });
   valve.dev = dev;
   dev.addEventListener("gattserverdisconnected", onValveLost);
@@ -339,10 +341,10 @@ async function connectValve() {
 }
 async function openValve() {
   const srv = await valve.dev.gatt.connect();
-  const svc = await srv.getPrimaryService(0xffe1);
-  valve.ch = await svc.getCharacteristic(0xffe3);
+  const svc = await srv.getPrimaryService(U("ffe1"));
+  valve.ch = await svc.getCharacteristic(U("ffe3"));
   try {
-    const n = await svc.getCharacteristic(0xffe2);
+    const n = await svc.getCharacteristic(U("ffe2"));
     let last = 0;
     n.addEventListener("characteristicvaluechanged", e => {
       const now = Date.now(); if (now - last < 2000) return; last = now;
@@ -365,9 +367,9 @@ async function onValveLost() {
 
 /* ---------- ELM327 OBD ---------- */
 const ELM_SPECS = [
-  { svc:0xfff0, w:0xfff2, n:0xfff1 },
-  { svc:0xffe0, w:0xffe1, n:0xffe1 },
-  { svc:0x18f0, w:0x2af1, n:0x2af0 },
+  { svc:U("fff0"), w:U("fff2"), n:U("fff1") },
+  { svc:U("ffe0"), w:U("ffe1"), n:U("ffe1") },
+  { svc:U("18f0"), w:U("2af1"), n:U("2af0") },
   { svc:"e7810a71-73ae-499d-8c15-faa9aef0c3f2", w:"bef8d6c9-9c21-4c9e-b632-bd58c1009f9f", n:"bef8d6c9-9c21-4c9e-b632-bd58c1009f9f" },
 ];
 const obd = { dev:null, w:null, n:null, connected:false, buf:"", resolve:null, lock:Promise.resolve(), last:0 };
@@ -653,6 +655,13 @@ $("pillObd").onclick = async () => {
 function renderAll() { renderConn(); renderLevels(); renderModeChips(); renderEditor(); renderPct(); renderTests(); renderAuto(); renderSim(); }
 if (!navigator.bluetooth) $("noBle").classList.add("show");
 log("網頁版本 " + VERSION);
+$("ver").textContent = VERSION;
+(async () => {
+  const b = navigator.bluetooth;
+  let avail = "不支援查詢";
+  try { if (b && b.getAvailability) avail = (await b.getAvailability()) ? "可用" : "不可用"; } catch (e) { avail = "查詢失敗：" + errText(e); }
+  log("診斷：網頁藍牙 " + (b ? "有" : "沒有") + "，藍牙狀態 " + avail + "，" + navigator.userAgent);
+})();
 renderAll();
 setInterval(tick, 200);
 </script>
