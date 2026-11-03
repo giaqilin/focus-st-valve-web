@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<title>排氣閥門控制</title>
+<style>
+:root{
+  --bg:#0b0d10; --panel:#14181d; --panel2:#1b2027; --line:#262d36;
+  --text:#e8ecf1; --muted:#8a95a3; --accent:#ffb020; --accent2:#ff6a1a;
+  --ok:#2fd27a; --bad:#ff4d5e; --info:#3ea7ff;
+  --r:14px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif}
+body{padding:calc(env(safe-area-inset-top) + 8px) 12px calc(env(safe-area-inset-bottom) + 16px)}
+h2{font-size:15px;margin:0 0 10px;color:var(--muted);font-weight:600;letter-spacing:.04em}
+button{font:inherit;color:inherit;border:0;cursor:pointer}
+input,select{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;width:100%}
+input[type=range]{padding:0;border:0;background:none;accent-color:var(--accent)}
+input[type=checkbox]{width:22px;height:22px;accent-color:var(--accent)}
+.wrap{max-width:1100px;margin:0 auto}
+
+header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+header h1{font-size:18px;margin:0 auto 0 0;font-weight:700}
+.pill{display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:7px 12px;font-size:13px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--bad)}
+.dot.on{background:var(--ok)} .dot.sim{background:var(--info)}
+
+nav{display:flex;gap:6px;margin-bottom:12px}
+nav button{flex:1;padding:10px;border-radius:10px;background:var(--panel);color:var(--muted);font-weight:600}
+nav button.act{background:var(--panel2);color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
+section{display:none} section.act{display:block}
+
+.grid{display:grid;gap:12px;grid-template-columns:1fr}
+@media (min-width:760px){.grid.two{grid-template-columns:1fr 1.25fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px}
+
+.rpm{font-size:64px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.rpm small{font-size:16px;color:var(--muted);font-weight:600;margin-left:6px}
+.src{font-size:12px;color:var(--muted);margin-top:6px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.stat{background:var(--panel2);border-radius:10px;padding:8px 10px}
+.stat b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+.stat span{font-size:12px;color:var(--muted)}
+
+.levels{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+.lv{position:relative;border-radius:10px;padding:14px 4px 10px;background:var(--panel2);border:2px solid transparent;text-align:center;font-weight:700}
+.lv small{display:block;font-size:11px;color:var(--muted);font-weight:500;margin-top:2px}
+.lv.target{border-color:var(--accent)}
+.lv.applied{background:linear-gradient(180deg,var(--accent),var(--accent2));color:#111}
+.lv.applied small{color:#3a2600}
+.status{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:12px 0 4px;flex-wrap:wrap}
+.status .now{font-size:20px;font-weight:700}
+.reason{font-size:13px;color:var(--accent);min-height:1.4em}
+.toggle{display:flex;align-items:center;gap:10px;background:var(--panel2);border-radius:999px;padding:6px 6px 6px 14px;font-weight:600}
+.sw{width:52px;height:30px;border-radius:999px;background:#333b46;position:relative;transition:.2s}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:.2s}
+.sw.on{background:var(--ok)} .sw.on::after{left:25px}
+
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{padding:10px 16px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);font-weight:600}
+.chip.act{background:var(--accent);color:#111;border-color:var(--accent)}
+
+.btn{padding:12px 16px;border-radius:12px;background:var(--panel2);border:1px solid var(--line);font-weight:600}
+.btn.pri{background:var(--accent);color:#111;border-color:var(--accent)}
+.btn.warn{background:transparent;color:var(--bad);border-color:#5a2730}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row>*{flex:1 1 auto}
+.mt{margin-top:12px}
+
+.sim label{display:grid;grid-template-columns:70px 1fr 64px;align-items:center;gap:10px;margin:8px 0;font-size:14px}
+.sim output{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
+
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:6px 4px;text-align:left;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600;font-size:12px}
+td input{padding:7px 8px}
+.cond{display:grid;grid-template-columns:28px 1fr;gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line)}
+.cond:last-child{border:0}
+.cond .fields{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:14px;color:var(--muted)}
+.cond .fields input,.cond .fields select{width:84px}
+.cond b{color:var(--text);display:block;margin-bottom:6px}
+.err{color:var(--bad);font-size:13px;min-height:1.2em}
+.note{font-size:13px;color:var(--muted)}
+
+.testgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px}
+.testgrid button{padding:10px 0;border-radius:10px;background:var(--panel2);border:1px solid var(--line);font-weight:700}
+.testgrid button.yes{background:#123d27;border-color:var(--ok)}
+.testgrid button.no{background:#3d1219;border-color:var(--bad)}
+.log{background:#07090b;border:1px solid var(--line);border-radius:10px;padding:8px;font:12px/1.5 ui-monospace,Menlo,monospace;height:180px;overflow:auto;white-space:pre-wrap;color:#b8c2cc}
+.ask{display:none;margin-top:10px;padding:12px;border-radius:12px;background:var(--panel2);border:1px solid var(--accent)}
+.ask.show{display:block}
+.banner{display:none;background:#3d1219;border:1px solid var(--bad);color:#ffd5da;padding:10px 12px;border-radius:12px;margin-bottom:10px;font-size:14px}
+.banner.show{display:block}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="banner" id="noBle">這個瀏覽器不支援網頁藍牙。iPhone 請用 <b>Bluefy – Web BLE Browser</b> 開啟這個網頁（Safari 不支援）。</div>
+
+<header>
+  <h1>排氣閥門控制</h1>
+  <button class="pill" id="pillValve"><span class="dot" id="dotValve"></span><span id="txtValve">連接控制器</span></button>
+  <button class="pill" id="pillObd"><span class="dot" id="dotObd"></span><span id="txtObd">連接 OBD</span></button>
+</header>
+
+<nav>
+  <button data-tab="dash" class="act">儀表</button>
+  <button data-tab="modes">模式設定</button>
+  <button data-tab="lab">實驗室</button>
+</nav>
+
+<!-- ===== 儀表 ===== -->
+<section id="dash" class="act">
+  <div class="grid two">
+    <div class="card">
+      <div class="rpm"><span id="vRpm">—</span><small>rpm</small></div>
+      <div class="src" id="vSrc">沒有轉速資料：連接 OBD，或在下方開啟模擬</div>
+      <div class="stats">
+        <div class="stat"><b id="vSpd">—</b><span>車速 km/h</span></div>
+        <div class="stat"><b id="vThr">—</b><span>油門 %</span></div>
+        <div class="stat"><b id="vEct">—</b><span>水溫 °C</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="levels" id="levels"></div>
+      <div class="status">
+        <div>
+          <div class="now" id="vNow">閥門：未知</div>
+          <div class="reason" id="vWhy"></div>
+        </div>
+        <button class="toggle" id="autoBtn">自動<span class="sw" id="autoSw"></span></button>
+      </div>
+      <div class="note">自動關閉時，點上方任一格即可手動切換。</div>
+    </div>
+  </div>
+
+  <div class="card mt">
+    <h2>駕駛模式</h2>
+    <div class="chips" id="modeChips"></div>
+  </div>
+
+  <div class="card mt sim">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">模擬數值（沒有 OBD 時測試用）</h2>
+      <button class="toggle" id="simBtn" style="flex:0 0 auto">模擬<span class="sw" id="simSw"></span></button>
+    </div>
+    <label>轉速<input type="range" id="sRpm" min="0" max="7000" step="50" value="900"><output id="oRpm">900</output></label>
+    <label>車速<input type="range" id="sSpd" min="0" max="200" step="1" value="0"><output id="oSpd">0</output></label>
+    <label>油門<input type="range" id="sThr" min="0" max="100" step="1" value="0"><output id="oThr">0</output></label>
+    <label>水溫<input type="range" id="sEct" min="0" max="110" step="1" value="85"><output id="oEct">85</output></label>
+  </div>
+</section>
+
+<!-- ===== 模式設定 ===== -->
+<section id="modes">
+  <div class="card">
+    <h2>選擇要編輯的模式</h2>
+    <div class="chips" id="editChips"></div>
+    <div class="row mt">
+      <input id="mName" placeholder="模式名稱" style="flex:2">
+      <button class="btn" id="mAdd">新增模式</button>
+      <button class="btn warn" id="mDel">刪除</button>
+    </div>
+  </div>
+
+  <div class="card mt">
+    <h2>轉速門檻</h2>
+    <p class="note" style="margin-top:0">轉速升到「進入」就往上一段；降到「退出」以下才往下一段。兩者錯開，閥門才不會在門檻附近來回抖。</p>
+    <table>
+      <thead><tr><th>段數</th><th>進入 ≥ rpm</th><th>退出 &lt; rpm</th></tr></thead>
+      <tbody id="thrBody"></tbody>
+    </table>
+    <div class="err" id="thrErr"></div>
+  </div>
+
+  <div class="card mt">
+    <h2>額外條件（依序套用，越下面優先權越高）</h2>
+    <div class="cond">
+      <input type="checkbox" id="cBoost">
+      <div><b>油門加成</b><div class="fields">油門 ≥ <input type="number" id="cBoostThr">% 時，至少開到第 <select id="cBoostLv"></select> 段</div></div>
+    </div>
+    <div class="cond">
+      <input type="checkbox" id="cLow">
+      <div><b>低速限制</b><div class="fields">車速 &lt; <input type="number" id="cLowSpd"> km/h 時，最多開到第 <select id="cLowLv"></select> 段</div></div>
+    </div>
+    <div class="cond">
+      <input type="checkbox" id="cCold">
+      <div><b>冷車限制</b><div class="fields">水溫 &lt; <input type="number" id="cColdT"> °C 時，最多開到第 <select id="cColdLv"></select> 段</div></div>
+    </div>
+    <div class="cond">
+      <input type="checkbox" checked disabled>
+      <div><b>模式上限</b><div class="fields">這個模式最多開到第 <select id="cMax"></select> 段</div></div>
+    </div>
+  </div>
+
+  <div class="card mt">
+    <h2>切換節奏</h2>
+    <div class="cond" style="border:0">
+      <span></span>
+      <div class="fields">兩次切換之間至少間隔 <input type="number" id="cHold" step="100"> 毫秒</div>
+    </div>
+    <div class="row mt">
+      <button class="btn" id="mReset">恢復所有預設值</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 實驗室 ===== -->
+<section id="lab">
+  <div class="card">
+    <h2>各段開度</h2>
+    <p class="note" style="margin-top:0">指令格式是 <code>bf＋兩位數百分比＋hyzrjkl</code>，100% 約等於 90°。目前只確認 15、30、50、70 有效；如果下方測出其他數值也能用，就可以改這裡。</p>
+    <div class="row" id="pctRow"></div>
+  </div>
+
+  <div class="card mt">
+    <h2>測試任意開度</h2>
+    <p class="note" style="margin-top:0">點一個數字：會先全關，2.5 秒後送出該開度。看閥門有沒有動，再按「有動／沒動」記錄。</p>
+    <div class="testgrid" id="testGrid"></div>
+    <div class="ask" id="ask">
+      <div id="askTxt" style="margin-bottom:8px"></div>
+      <div class="row"><button class="btn pri" id="askYes">有動</button><button class="btn" id="askNo">沒動</button></div>
+    </div>
+  </div>
+
+  <div class="card mt">
+    <h2>手動送出指令</h2>
+    <div class="row">
+      <input id="rawCmd" placeholder="例如 bf30hyzrjkl" style="flex:3" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <button class="btn pri" id="rawSend">送出</button>
+    </div>
+    <div class="row mt">
+      <button class="btn" data-raw="clostnslrjkl">全關</button>
+      <button class="btn" data-raw="TNOPENzrjkl">全開</button>
+    </div>
+  </div>
+
+  <div class="card mt">
+    <h2>紀錄</h2>
+    <div class="log" id="log"></div>
+  </div>
+</section>
+
+</div>
+
+<script>
+"use strict";
+/* ---------- 指令 ---------- */
+const VERSION = "2026-11-03a";
+const CMD_CLOSE = "clostnslrjkl";
+const CMD_OPEN  = "TNOPENzrjkl";
+const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
+const enc = s => new TextEncoder().encode(s);
+const $ = id => document.getElementById(id);
+
+/* ---------- 設定 ---------- */
+const DEFAULTS = {
+  pct: [15, 30, 50, 70],
+  holdMs: 800,
+  active: "comfort",
+  modes: [
+    { id:"comfort", name:"舒適", up:[2200,2800,3400,4200,5000], down:[1900,2500,3100,3800,4600],
+      boostOn:false, boostThr:80, boostLv:4, lowOn:true, lowSpd:15, lowLv:1, coldOn:true, coldT:60, coldLv:0, maxLv:5 },
+    { id:"sport", name:"運動", up:[1800,2400,3000,3600,4300], down:[1500,2100,2700,3300,4000],
+      boostOn:true, boostThr:70, boostLv:5, lowOn:false, lowSpd:15, lowLv:2, coldOn:true, coldT:50, coldLv:1, maxLv:5 },
+    { id:"track", name:"賽道", up:[1000,1500,2000,2500,3000], down:[800,1300,1800,2300,2800],
+      boostOn:true, boostThr:40, boostLv:5, lowOn:false, lowSpd:15, lowLv:5, coldOn:false, coldT:50, coldLv:5, maxLv:5 },
+    { id:"night", name:"深夜", up:[3000,9000,9000,9000,9000], down:[2700,8800,8800,8800,8800],
+      boostOn:false, boostThr:90, boostLv:1, lowOn:true, lowSpd:30, lowLv:0, coldOn:true, coldT:70, coldLv:0, maxLv:1 },
+  ],
+};
+const clone = o => JSON.parse(JSON.stringify(o));
+let S;
+try { S = JSON.parse(localStorage.getItem("valveSettings")) || clone(DEFAULTS); } catch (e) { S = clone(DEFAULTS); }
+if (!S.modes || !S.modes.length) S = clone(DEFAULTS);
+const save = () => { try { localStorage.setItem("valveSettings", JSON.stringify(S)); } catch (e) {} };
+const mode = () => S.modes.find(m => m.id === S.active) || S.modes[0];
+
+const levelLabel = i => i === 0 ? "全關" : i === 5 ? "全開" : `第${i}段`;
+const levelAngle = i => i === 0 ? "0°" : i === 5 ? "90°" : Math.round(S.pct[i-1] * 0.9) + "°";
+const levelCmd = i => i === 0 ? CMD_CLOSE : i === 5 ? CMD_OPEN : pctCmd(S.pct[i-1]);
+
+/* ---------- 紀錄 ---------- */
+function log(msg) {
+  const el = $("log"), t = new Date().toTimeString().slice(0, 8);
+  el.textContent = (t + "  " + msg + "\n" + el.textContent).slice(0, 8000);
+}
+
+/* ---------- 藍牙共用 ---------- */
+async function bleWrite(ch, data) {
+  const p = ch.properties || {};
+  if (p.write && ch.writeValueWithResponse) return ch.writeValueWithResponse(data);
+  if (p.writeWithoutResponse && ch.writeValueWithoutResponse) return ch.writeValueWithoutResponse(data);
+  return ch.writeValue(data);
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ---------- 閥門控制器 ---------- */
+const valve = { dev:null, ch:null, connected:false };
+let vQueue = Promise.resolve();
+
+function valveSend(str, times = 1) {
+  vQueue = vQueue.then(async () => {
+    if (!valve.ch) throw new Error("控制器未連線");
+    for (let k = 0; k < times; k++) {
+      await bleWrite(valve.ch, enc(str));
+      if (k < times - 1) await sleep(100);
+    }
+    log("→ " + str);
+    return true;
+  }).catch(e => { log("寫入失敗：" + (e && e.message || e)); return false; });
+  return vQueue;
+}
+
+async function connectValve() {
+  const dev = await navigator.bluetooth.requestDevice({
+    filters: [{ namePrefix: "AME" }, { services: [0xffe1] }],
+    optionalServices: [0xffe1],
+  });
+  valve.dev = dev;
+  dev.addEventListener("gattserverdisconnected", onValveLost);
+  await openValve();
+}
+async function openValve() {
+  const srv = await valve.dev.gatt.connect();
+  const svc = await srv.getPrimaryService(0xffe1);
+  valve.ch = await svc.getCharacteristic(0xffe3);
+  try {
+    const n = await svc.getCharacteristic(0xffe2);
+    let last = 0;
+    n.addEventListener("characteristicvaluechanged", e => {
+      const now = Date.now(); if (now - last < 2000) return; last = now;
+      log("← " + new TextDecoder().decode(e.target.value));
+    });
+    await n.startNotifications();
+  } catch (e) {}
+  valve.connected = true; applied = -1; renderConn();
+  log("控制器已連線：" + (valve.dev.name || ""));
+  keepAwake();
+}
+async function onValveLost() {
+  valve.connected = false; valve.ch = null; renderConn();
+  log("控制器斷線，嘗試重新連線…");
+  for (let i = 0; i < 6 && !valve.connected; i++) {
+    await sleep(1500 * (i + 1));
+    try { await openValve(); } catch (e) {}
+  }
+}
+
+/* ---------- ELM327 OBD ---------- */
+const ELM_SPECS = [
+  { svc:0xfff0, w:0xfff2, n:0xfff1 },
+  { svc:0xffe0, w:0xffe1, n:0xffe1 },
+  { svc:0x18f0, w:0x2af1, n:0x2af0 },
+  { svc:"e7810a71-73ae-499d-8c15-faa9aef0c3f2", w:"bef8d6c9-9c21-4c9e-b632-bd58c1009f9f", n:"bef8d6c9-9c21-4c9e-b632-bd58c1009f9f" },
+];
+const obd = { dev:null, w:null, n:null, connected:false, buf:"", resolve:null, lock:Promise.resolve(), last:0 };
+const data = { rpm:null, spd:null, thr:null, ect:null };
+
+function elm(cmd, timeout = 1500) {
+  obd.lock = obd.lock.then(() => new Promise(async res => {
+    obd.buf = "";
+    const to = setTimeout(() => { obd.resolve = null; res(""); }, timeout);
+    obd.resolve = r => { clearTimeout(to); res(r); };
+    try { await bleWrite(obd.w, enc(cmd + "\r")); }
+    catch (e) { clearTimeout(to); obd.resolve = null; res(""); }
+  }));
+  return obd.lock;
+}
+function onElmData(e) {
+  obd.buf += new TextDecoder().decode(e.target.value);
+  if (obd.buf.includes(">") && obd.resolve) { const r = obd.buf; obd.buf = ""; const f = obd.resolve; obd.resolve = null; f(r); }
+}
+function pid(resp, p, n) {
+  const s = resp.replace(/[\s>]/g, "").toUpperCase(), i = s.indexOf("41" + p);
+  if (i < 0) return null;
+  const out = [];
+  for (let k = 0; k < n; k++) { const v = parseInt(s.substr(i + 4 + k*2, 2), 16); if (isNaN(v)) return null; out.push(v); }
+  return out;
+}
+
+async function connectObd() {
+  const dev = await navigator.bluetooth.requestDevice({
+    acceptAllDevices: true, optionalServices: ELM_SPECS.map(s => s.svc),
+  });
+  obd.dev = dev;
+  dev.addEventListener("gattserverdisconnected", () => { obd.connected = false; renderConn(); log("OBD 斷線"); });
+  const srv = await dev.gatt.connect();
+  let found = null;
+  for (const sp of ELM_SPECS) {
+    try {
+      const svc = await srv.getPrimaryService(sp.svc);
+      found = { w: await svc.getCharacteristic(sp.w), n: await svc.getCharacteristic(sp.n) }; break;
+    } catch (e) {}
+  }
+  if (!found) throw new Error("找不到 ELM327 的藍牙服務，這顆 OBD 可能不是 BLE 版");
+  obd.w = found.w; obd.n = found.n;
+  obd.n.addEventListener("characteristicvaluechanged", onElmData);
+  await obd.n.startNotifications();
+  log("OBD 已連線，初始化中…");
+  await elm("ATZ", 3000);
+  for (const c of ["ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"]) await elm(c);
+  await elm("0100", 6000);
+  obd.connected = true; renderConn(); log("OBD 就緒");
+  keepAwake();
+  pollObd();
+}
+async function pollObd() {
+  const extra = ["010D", "0111", "0105"]; let k = 0;
+  while (obd.connected) {
+    const r = await elm("010C");
+    const a = pid(r, "0C", 2);
+    if (a) { data.rpm = Math.round((a[0]*256 + a[1]) / 4); obd.last = Date.now(); }
+    const c = extra[k++ % 3], r2 = await elm(c), b = pid(r2, c.slice(2), 1);
+    if (b) {
+      if (c === "010D") data.spd = b[0];
+      if (c === "0111") data.thr = Math.round(b[0] * 100 / 255);
+      if (c === "0105") data.ect = b[0] - 40;
+    }
+  }
+}
+
+/* ---------- 判斷邏輯 ---------- */
+let auto = true, sim = false, base = 0, applied = -1, lastSend = 0, target = 0, why = [];
+
+function source() {
+  if (obd.connected && Date.now() - obd.last < 3000) return "obd";
+  if (sim) return "sim";
+  return null;
+}
+function inputs() {
+  if (source() === "sim") return { rpm:+$("sRpm").value, spd:+$("sSpd").value, thr:+$("sThr").value, ect:+$("sEct").value };
+  return { ...data };
+}
+function compute(d, m) {
+  let b = base;
+  while (b < 5 && d.rpm >= m.up[b]) b++;
+  while (b > 0 && d.rpm < m.down[b-1]) b--;
+  base = b;
+  let t = b; const w = [];
+  if (m.boostOn && d.thr != null && d.thr >= m.boostThr && t < m.boostLv) { t = m.boostLv; w.push("油門加成"); }
+  if (m.lowOn && d.spd != null && d.spd < m.lowSpd && t > m.lowLv) { t = m.lowLv; w.push("低速限制"); }
+  if (m.coldOn && d.ect != null && d.ect < m.coldT && t > m.coldLv) { t = m.coldLv; w.push("冷車限制"); }
+  if (t > m.maxLv) { t = m.maxLv; w.push("模式上限"); }
+  return { t, w };
+}
+function setLevel(i) {
+  applied = i; lastSend = Date.now();
+  valveSend(levelCmd(i), (i === 0 || i === 5) ? 2 : 1).then(ok => { if (!ok && applied === i) applied = -1; });
+}
+function tick() {
+  const src = source(), d = inputs();
+  if (src && d.rpm != null) {
+    const r = compute(d, mode()); target = r.t; why = r.w;
+    if (auto && valve.connected && target !== applied && Date.now() - lastSend >= S.holdMs) setLevel(target);
+  }
+  renderDash(src, d);
+}
+
+/* ---------- 畫面 ---------- */
+function renderConn() {
+  $("dotValve").className = "dot" + (valve.connected ? " on" : "");
+  $("txtValve").textContent = valve.connected ? "控制器已連線" : "連接控制器";
+  $("dotObd").className = "dot" + (obd.connected ? " on" : sim ? " sim" : "");
+  $("txtObd").textContent = obd.connected ? "OBD 已連線" : sim ? "模擬中" : "連接 OBD";
+}
+function renderLevels() {
+  const el = $("levels"); el.innerHTML = "";
+  for (let i = 0; i <= 5; i++) {
+    const b = document.createElement("button");
+    b.className = "lv"; b.dataset.i = i;
+    b.innerHTML = `${i === 0 ? "關" : i === 5 ? "全" : i}<small>${levelAngle(i)}</small>`;
+    b.onclick = () => {
+      if (auto) { log("自動模式中，請先關閉「自動」再手動切換"); return; }
+      setLevel(i);
+    };
+    el.appendChild(b);
+  }
+}
+function renderDash(src, d) {
+  const f = v => v == null ? "—" : v;
+  $("vRpm").textContent = src ? f(d.rpm) : "—";
+  $("vSpd").textContent = src ? f(d.spd) : "—";
+  $("vThr").textContent = src ? f(d.thr) : "—";
+  $("vEct").textContent = src ? f(d.ect) : "—";
+  $("vSrc").textContent = src === "obd" ? "資料來源：OBD" : src === "sim" ? "資料來源：模擬" : (obd.connected ? "等待 OBD 回應…" : "沒有轉速資料：連接 OBD，或在下方開啟模擬");
+  document.querySelectorAll(".lv").forEach(b => {
+    const i = +b.dataset.i;
+    b.classList.toggle("applied", i === applied);
+    b.classList.toggle("target", auto && src && i === target && i !== applied);
+  });
+  $("vNow").textContent = applied < 0 ? "閥門：未知" : `閥門：${levelLabel(applied)}（${levelAngle(applied)}）`;
+  $("vWhy").textContent = !auto ? "手動模式" : !valve.connected ? "控制器未連線" : !src ? "等待轉速資料" : why.length ? "套用：" + why.join("、") : "";
+}
+function renderModeChips() {
+  for (const [id, onPick] of [["modeChips", m => { S.active = m.id; save(); renderModeChips(); }],
+                              ["editChips", m => { editId = m.id; renderModeChips(); renderEditor(); }]]) {
+    const el = $(id); el.innerHTML = "";
+    const cur = id === "modeChips" ? S.active : editId;
+    S.modes.forEach(m => {
+      const c = document.createElement("button");
+      c.className = "chip" + (m.id === cur ? " act" : ""); c.textContent = m.name;
+      c.onclick = () => onPick(m); el.appendChild(c);
+    });
+  }
+}
+
+/* ---------- 模式編輯 ---------- */
+let editId = S.active;
+const em = () => S.modes.find(m => m.id === editId) || S.modes[0];
+function lvOptions(sel) { sel.innerHTML = ""; for (let i = 0; i <= 5; i++) sel.add(new Option(i === 0 ? "0（全關）" : i === 5 ? "5（全開）" : String(i), i)); }
+["cBoostLv", "cLowLv", "cColdLv", "cMax"].forEach(id => lvOptions($(id)));
+
+function validate(m) {
+  for (let i = 0; i < 5; i++) {
+    if (!(m.down[i] < m.up[i])) return `第 ${i+1} 段的「退出」要小於「進入」`;
+    if (i && !(m.up[i] > m.up[i-1])) return `第 ${i+1} 段的「進入」要大於第 ${i} 段`;
+  }
+  return "";
+}
+function renderEditor() {
+  const m = em();
+  $("mName").value = m.name;
+  const tb = $("thrBody"); tb.innerHTML = "";
+  for (let i = 0; i < 5; i++) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${levelLabel(i+1)}<br><small class="note">${levelAngle(i+1)}</small></td>
+      <td><input type="number" step="50" data-k="up" data-i="${i}" value="${m.up[i]}"></td>
+      <td><input type="number" step="50" data-k="down" data-i="${i}" value="${m.down[i]}"></td>`;
+    tb.appendChild(tr);
+  }
+  tb.querySelectorAll("input").forEach(inp => inp.oninput = () => {
+    m[inp.dataset.k][+inp.dataset.i] = +inp.value;
+    const e = validate(m); $("thrErr").textContent = e; if (!e) save();
+  });
+  $("thrErr").textContent = validate(m);
+  const bind = (id, key, num = true, chk = false) => {
+    const el = $(id);
+    if (chk) { el.checked = !!m[key]; el.onchange = () => { m[key] = el.checked; save(); }; }
+    else { el.value = m[key]; el.oninput = el.onchange = () => { m[key] = num ? +el.value : el.value; save(); }; }
+  };
+  bind("cBoost", "boostOn", true, true); bind("cBoostThr", "boostThr"); bind("cBoostLv", "boostLv");
+  bind("cLow", "lowOn", true, true); bind("cLowSpd", "lowSpd"); bind("cLowLv", "lowLv");
+  bind("cCold", "coldOn", true, true); bind("cColdT", "coldT"); bind("cColdLv", "coldLv");
+  bind("cMax", "maxLv");
+  $("cHold").value = S.holdMs;
+}
+$("cHold").oninput = () => { S.holdMs = Math.max(200, +$("cHold").value || 800); save(); };
+$("mName").oninput = () => { em().name = $("mName").value || "未命名"; save(); renderModeChips(); };
+$("mAdd").onclick = () => {
+  const m = clone(em()); m.id = "m" + Date.now(); m.name = m.name + " 複本";
+  S.modes.push(m); editId = m.id; save(); renderModeChips(); renderEditor();
+};
+$("mDel").onclick = () => {
+  if (S.modes.length <= 1) return;
+  if (!confirm(`刪除「${em().name}」？`)) return;
+  S.modes = S.modes.filter(m => m.id !== editId);
+  if (!S.modes.find(m => m.id === S.active)) S.active = S.modes[0].id;
+  editId = S.active; save(); renderModeChips(); renderEditor();
+};
+$("mReset").onclick = () => {
+  if (!confirm("把所有模式和開度恢復成預設值？")) return;
+  S = clone(DEFAULTS); editId = S.active; save(); renderAll();
+};
+
+/* ---------- 實驗室 ---------- */
+function renderPct() {
+  const row = $("pctRow"); row.innerHTML = "";
+  S.pct.forEach((p, i) => {
+    const wrap = document.createElement("label");
+    wrap.className = "note"; wrap.style.flex = "1 1 70px";
+    wrap.innerHTML = `第${i+1}段 %<input type="number" min="1" max="99" value="${p}">`;
+    wrap.querySelector("input").oninput = e => {
+      const v = +e.target.value; if (v >= 1 && v <= 99) { S.pct[i] = v; save(); renderLevels(); }
+    };
+    row.appendChild(wrap);
+  });
+}
+const TESTS = [5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,99];
+let results = {}; try { results = JSON.parse(localStorage.getItem("valveTests")) || {}; } catch (e) {}
+let testing = null;
+function renderTests() {
+  const g = $("testGrid"); g.innerHTML = "";
+  TESTS.forEach(v => {
+    const b = document.createElement("button");
+    b.textContent = v; b.className = results[v] === true ? "yes" : results[v] === false ? "no" : "";
+    b.onclick = async () => {
+      if (!valve.connected) { log("請先連接控制器"); return; }
+      auto = false; renderAuto();
+      testing = v; $("ask").classList.remove("show");
+      await valveSend(CMD_CLOSE, 2); await sleep(2500);
+      await valveSend(pctCmd(v));
+      $("askTxt").textContent = `剛送出 ${pctCmd(v)}（約 ${Math.round(v*0.9)}°），閥門有動嗎？`;
+      $("ask").classList.add("show");
+    };
+    g.appendChild(b);
+  });
+}
+const mark = ok => {
+  if (testing == null) return; results[testing] = ok;
+  try { localStorage.setItem("valveTests", JSON.stringify(results)); } catch (e) {}
+  log(`測試 ${testing}%：${ok ? "有動" : "沒動"}`);
+  testing = null; $("ask").classList.remove("show"); renderTests();
+};
+$("askYes").onclick = () => mark(true);
+$("askNo").onclick = () => mark(false);
+$("rawSend").onclick = () => { const v = $("rawCmd").value.trim(); if (v) { auto = false; renderAuto(); valveSend(v); } };
+document.querySelectorAll("[data-raw]").forEach(b => b.onclick = () => { auto = false; renderAuto(); valveSend(b.dataset.raw, 2); });
+
+/* ---------- 其他 ---------- */
+let wakeLock = null;
+async function keepAwake() { try { if ("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {} }
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { wakeLock = null; if (valve.connected || obd.connected) keepAwake(); } });
+
+function renderAuto() { $("autoSw").classList.toggle("on", auto); }
+function renderSim() { $("simSw").classList.toggle("on", sim); renderConn(); }
+$("autoBtn").onclick = () => { auto = !auto; renderAuto(); if (auto) applied = -1; };
+$("simBtn").onclick = () => { sim = !sim; renderSim(); };
+[["sRpm","oRpm"],["sSpd","oSpd"],["sThr","oThr"],["sEct","oEct"]].forEach(([s,o]) => $(s).oninput = () => { $(o).textContent = $(s).value; });
+
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("act", x === b));
+  document.querySelectorAll("section").forEach(s => s.classList.toggle("act", s.id === b.dataset.tab));
+});
+
+$("pillValve").onclick = async () => {
+  if (valve.connected) return;
+  try { await connectValve(); } catch (e) { if (e.name !== "NotFoundError") log("連線失敗：" + e.message); }
+};
+$("pillObd").onclick = async () => {
+  if (obd.connected) return;
+  try { await connectObd(); } catch (e) { if (e.name !== "NotFoundError") log("OBD 連線失敗：" + e.message); }
+};
+
+function renderAll() { renderConn(); renderLevels(); renderModeChips(); renderEditor(); renderPct(); renderTests(); renderAuto(); renderSim(); }
+if (!navigator.bluetooth) $("noBle").classList.add("show");
+log("網頁版本 " + VERSION);
+renderAll();
+setInterval(tick, 200);
+</script>
+</body>
+</html>
