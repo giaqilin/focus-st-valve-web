@@ -174,8 +174,9 @@ td input{padding:7px 8px}
   <div class="card mt">
     <h2>轉速門檻</h2>
     <p class="note" style="margin-top:0">轉速升到「進入」就往上一段；降到「退出」以下才往下一段。兩者錯開，閥門才不會在門檻附近來回抖。</p>
+    <p class="note">取消勾選的段數會被跳過，改用下面最近一個有勾的段。中間段之間互切時，控制器會先關到底再開（AME 也一樣），<b>每個模式只留一個中間段</b>，加速時就不會出現「關一下再開」。</p>
     <table>
-      <thead><tr><th>段數</th><th>進入 ≥ rpm</th><th>退出 &lt; rpm</th></tr></thead>
+      <thead><tr><th>使用</th><th>段數</th><th>進入 ≥ rpm</th><th>退出 &lt; rpm</th></tr></thead>
       <tbody id="thrBody"></tbody>
     </table>
     <div class="err" id="thrErr"></div>
@@ -283,7 +284,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03j";
+const VERSION = "2026-11-03k";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -517,6 +518,12 @@ function compute(d, m) {
   if (m.lowOn && d.spd != null && d.spd < m.lowSpd && t > m.lowLv) { t = m.lowLv; w.push("低速限制"); }
   if (m.coldOn && d.ect != null && d.ect < m.coldT && t > m.coldLv) { t = m.coldLv; w.push("冷車限制"); }
   if (t > m.maxLv) { t = m.maxLv; w.push("模式上限"); }
+  // 停用的中間段往下找最近一個有啟用的段
+  const use = Array.isArray(m.use) ? m.use : [];
+  if (t >= 1 && t <= 4 && use[t-1] === false) {
+    while (t >= 1 && t <= 4 && use[t-1] === false) t--;
+    w.push("跳過停用段");
+  }
   return { t, w };
 }
 function setLevel(i) {
@@ -601,14 +608,19 @@ function renderEditor() {
   const m = em();
   $("mName").value = m.name;
   const tb = $("thrBody"); tb.innerHTML = "";
+  if (!Array.isArray(m.use)) m.use = [true, true, true, true];
   for (let i = 0; i < 5; i++) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${levelLabel(i+1)}<br><small class="note">${levelAngle(i+1)}</small></td>
+    const on = i === 4 || m.use[i] !== false;
+    tr.style.opacity = on ? "" : ".45";
+    tr.innerHTML = `<td>${i < 4 ? `<input type="checkbox" data-use="${i}" ${on ? "checked" : ""}>` : `<input type="checkbox" checked disabled>`}</td>
+      <td>${levelLabel(i+1)}<br><small class="note">${levelAngle(i+1)}</small></td>
       <td><input type="number" step="50" data-k="up" data-i="${i}" value="${m.up[i]}"></td>
       <td><input type="number" step="50" data-k="down" data-i="${i}" value="${m.down[i]}"></td>`;
     tb.appendChild(tr);
   }
-  tb.querySelectorAll("input").forEach(inp => inp.oninput = () => {
+  tb.querySelectorAll("[data-use]").forEach(cb => cb.onchange = () => { m.use[+cb.dataset.use] = cb.checked; save(); renderEditor(); });
+  tb.querySelectorAll("input[data-k]").forEach(inp => inp.oninput = () => {
     m[inp.dataset.k][+inp.dataset.i] = +inp.value;
     const e = validate(m); $("thrErr").textContent = e; if (!e) save();
   });
