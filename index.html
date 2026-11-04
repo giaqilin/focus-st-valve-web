@@ -339,7 +339,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-04a";
+const VERSION = "2026-11-04b";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -353,12 +353,12 @@ const DEFAULTS = {
   pct: [15, 30, 50, 70],
   holdMs: 800,
   upMs: 400,
-  downMs: 2500,
+  downMs: 1500,
   testWait: 5,
   active: "comfort",
   modes: [
     { id:"comfort", name:"舒適", bands:[{from:0,lv:0},{from:2800,lv:2},{from:4500,lv:5}], hyst:300,
-      loadOn:true, loadThr:80, loadLv:2, cruiseOn:true, cruiseLoad:30, cruiseLv:0,
+      loadOn:true, loadThr:80, loadLv:5, cruiseOn:true, cruiseLoad:30, cruiseLv:0,
       lowOn:true, lowSpd:15, lowLv:0, coldOn:true, coldT:60, coldLv:0, maxLv:5 },
     { id:"sport", name:"運動", bands:[{from:0,lv:0},{from:2200,lv:3},{from:3500,lv:5}], hyst:300,
       loadOn:true, loadThr:70, loadLv:5, cruiseOn:false, cruiseLoad:25, cruiseLv:0,
@@ -376,7 +376,14 @@ let S;
 try { S = JSON.parse(localStorage.getItem("valveSettings")) || clone(DEFAULTS); } catch (e) { S = clone(DEFAULTS); }
 if (!S.modes || !S.modes.length) S = clone(DEFAULTS);
 if (S.upMs == null) S.upMs = 400;
-if (S.downMs == null) S.downMs = 2500;
+if (S.downMs == null) S.downMs = 1500;
+// 2026-11-04 預設值調整（車主是自排）：只改還停在舊預設值、車主沒動過的欄位
+if (!(S.rev >= 2)) {
+  if (S.downMs === 2500) S.downMs = 1500;
+  const c = S.modes.find(m => m.id === "comfort");
+  if (c && c.loadOn && c.loadThr === 80 && c.loadLv === 2) c.loadLv = 5;
+  S.rev = 2;
+}
 delete S.stableMs;
 // 舊版（每段一組進入／退出門檻）轉成轉速區間，保留車主調過的數字
 S.modes.forEach(m => {
@@ -622,7 +629,7 @@ function setLevel(i) {
 // 換檔時轉速和負載會掉一下，只要 downMs 內有回來過，閥門就不動；真的要關，也只關到這段時間內最開的那段
 let tHist = [], downSince = 0;
 const upMs = () => S.upMs >= 0 ? S.upMs : 400;
-const downMs = () => S.downMs >= 0 ? S.downMs : 2500;
+const downMs = () => S.downMs >= 0 ? S.downMs : 1500;
 /* ---------- 行車紀錄 ---------- */
 // 每筆：[時間 ms, 轉速, 負載, 車速, 節氣門, 水溫, 目標段, 實際段, 模式名稱]
 const REC_MAX = 30000;
@@ -780,7 +787,7 @@ function renderEditor() {
 }
 $("cHold").oninput = () => { S.holdMs = Math.max(200, +$("cHold").value || 800); save(); };
 $("cUp").oninput = () => { const v = +$("cUp").value; S.upMs = v >= 0 ? Math.min(v, 5000) : 400; save(); };
-$("cDown").oninput = () => { const v = +$("cDown").value; S.downMs = v >= 0 ? Math.min(v, 10000) : 2500; save(); };
+$("cDown").oninput = () => { const v = +$("cDown").value; S.downMs = v >= 0 ? Math.min(v, 10000) : 1500; save(); };
 $("mName").oninput = () => { em().name = $("mName").value || "未命名"; save(); renderModeChips(); };
 $("mAdd").onclick = () => {
   const m = clone(em()); m.id = "m" + Date.now(); m.name = m.name + " 複本";
