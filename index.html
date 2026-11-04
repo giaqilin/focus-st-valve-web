@@ -224,10 +224,14 @@ td input{padding:7px 8px}
 
   <div class="card mt">
     <h2>切換節奏</h2>
-    <p class="note" style="margin-top:0">第 1～4 段每次切換，控制器都會先跑到底歸零再開到位置（約 0.5 秒、響兩聲）。下面兩個設定可以減少切換次數。</p>
+    <p class="note" style="margin-top:0">開大和關小分開設定：開大要快，聲浪才跟得上油門；關小要慢，<b>換檔時轉速掉下來、負載瞬間歸零</b>，只要在這段時間內又回來，閥門就不會動。</p>
     <div class="cond">
       <span></span>
-      <div class="fields">目標段數要維持 <input type="number" id="cStable" step="100" min="0"> 毫秒才切換（0＝馬上切）</div>
+      <div class="fields">要開大，維持 <input type="number" id="cUp" step="100" min="0"> 毫秒才切</div>
+    </div>
+    <div class="cond">
+      <span></span>
+      <div class="fields">要關小，維持 <input type="number" id="cDown" step="100" min="0"> 毫秒才切（建議比換檔時間長）</div>
     </div>
     <div class="cond" style="border:0">
       <span></span>
@@ -335,7 +339,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-03n";
+const VERSION = "2026-11-04a";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -348,7 +352,8 @@ const $ = id => document.getElementById(id);
 const DEFAULTS = {
   pct: [15, 30, 50, 70],
   holdMs: 800,
-  stableMs: 600,
+  upMs: 400,
+  downMs: 2500,
   testWait: 5,
   active: "comfort",
   modes: [
@@ -370,6 +375,9 @@ const clone = o => JSON.parse(JSON.stringify(o));
 let S;
 try { S = JSON.parse(localStorage.getItem("valveSettings")) || clone(DEFAULTS); } catch (e) { S = clone(DEFAULTS); }
 if (!S.modes || !S.modes.length) S = clone(DEFAULTS);
+if (S.upMs == null) S.upMs = 400;
+if (S.downMs == null) S.downMs = 2500;
+delete S.stableMs;
 // 舊版（每段一組進入／退出門檻）轉成轉速區間，保留車主調過的數字
 S.modes.forEach(m => {
   if (Array.isArray(m.bands)) return;
@@ -608,8 +616,13 @@ function setLevel(i) {
   applied = i; lastSend = Date.now();
   valveSend(levelCmd(i), (i === 0 || i === 5) ? 2 : 1).then(ok => { if (!ok && applied === i) applied = -1; });
 }
-// 目標段數要穩定一段時間才送出：一腳油門衝上去時直接切到最後那段，不要一路 1→2→3→4 每段都歸零一次
-let pendT = -1, pendSince = 0;
+// 開大、關小分開計時，看「最近一段時間」的目標：
+//  - 最近 upMs 內的目標全都比現在大 → 開到其中最小的那個
+//  - 最近 downMs 內的目標全都比現在小 → 關到其中最大的那個
+// 換檔時轉速和負載會掉一下，只要 downMs 內有回來過，閥門就不動；真的要關，也只關到這段時間內最開的那段
+let tHist = [], downSince = 0;
+const upMs = () => S.upMs >= 0 ? S.upMs : 400;
+const downMs = () => S.downMs >= 0 ? S.downMs : 2500;
 /* ---------- 行車紀錄 ---------- */
 // 每筆：[時間 ms, 轉速, 負載, 車速, 節氣門, 水溫, 目標段, 實際段, 模式名稱]
 const REC_MAX = 30000;
@@ -631,9 +644,20 @@ function tick() {
   if (src === "obd" && d.rpm != null) recPush(d, now);
   if (src && d.rpm != null) {
     const r = compute(d, mode()); target = r.t; why = r.w;
-    if (target !== pendT) { pendT = target; pendSince = now; }
-    const stable = S.stableMs >= 0 ? S.stableMs : 600;
-    if (auto && valve.connected && target !== applied && now - pendSince >= stable && now - lastSend >= S.holdMs) setLevel(target);
+    tHist.push([now, target]);
+    const keep = Math.max(upMs(), downMs()) + 1000;
+    while (tHist.length && now - tHist[0][0] > keep) tHist.shift();
+    const win = ms => tHist[0][0] <= now - ms ? tHist.filter(x => now - x[0] <= ms).map(x => x[1]) : null;
+    let next = null;
+    if (applied < 0) next = target;
+    else {
+      const u = win(upMs()), d = win(downMs());
+      if (u && u.every(v => v > applied)) next = Math.min(...u);
+      else if (d && d.every(v => v < applied)) next = Math.max(...d);
+      // 倒數顯示用：目標第一次比現在小的時間
+      if (target < applied) { if (!downSince) downSince = now; } else downSince = 0;
+    }
+    if (auto && valve.connected && next != null && next !== applied && now - lastSend >= S.holdMs) { setLevel(next); downSince = 0; }
   }
   renderDash(src, d);
 }
@@ -672,7 +696,8 @@ function renderDash(src, d) {
     b.classList.toggle("target", auto && src && i === target && i !== applied);
   });
   $("vNow").textContent = applied < 0 ? "閥門：未知" : `閥門：${levelLabel(applied)}（${levelAngle(applied)}）`;
-  $("vWhy").textContent = !auto ? "手動模式" : !valve.connected ? "控制器未連線" : !src ? "等待轉速資料" : why.length ? "套用：" + why.join("、") : "";
+  const wait = downSince ? `，${((downMs() - (Date.now() - downSince)) / 1000).toFixed(1)} 秒後關小` : "";
+  $("vWhy").textContent = !auto ? "手動模式" : !valve.connected ? "控制器未連線" : !src ? "等待轉速資料" : (why.length ? "套用：" + why.join("、") : "") + wait;
 }
 function renderModeChips() {
   for (const [id, onPick] of [["modeChips", m => { S.active = m.id; base = 0; save(); renderModeChips(); }],
@@ -751,10 +776,11 @@ function renderEditor() {
   bind("cCold", "coldOn", true, true); bind("cColdT", "coldT"); bind("cColdLv", "coldLv");
   bind("cMax", "maxLv");
   $("cHold").value = S.holdMs;
-  $("cStable").value = S.stableMs >= 0 ? S.stableMs : 600;
+  $("cUp").value = upMs(); $("cDown").value = downMs();
 }
 $("cHold").oninput = () => { S.holdMs = Math.max(200, +$("cHold").value || 800); save(); };
-$("cStable").oninput = () => { const v = +$("cStable").value; S.stableMs = v >= 0 ? Math.min(v, 5000) : 600; save(); };
+$("cUp").oninput = () => { const v = +$("cUp").value; S.upMs = v >= 0 ? Math.min(v, 5000) : 400; save(); };
+$("cDown").oninput = () => { const v = +$("cDown").value; S.downMs = v >= 0 ? Math.min(v, 10000) : 2500; save(); };
 $("mName").oninput = () => { em().name = $("mName").value || "未命名"; save(); renderModeChips(); };
 $("mAdd").onclick = () => {
   const m = clone(em()); m.id = "m" + Date.now(); m.name = m.name + " 複本";
