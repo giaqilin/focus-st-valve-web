@@ -323,6 +323,13 @@ td input{padding:7px 8px}
   </div>
 
   <div class="card mt">
+    <h2>OBD 支援項目掃描</h2>
+    <p class="note" style="margin-top:0">問車上每個電腦（引擎、變速箱⋯）支援哪些<b>標準</b> OBD 資料，大約 10 秒。只送標準的讀取指令（0100、0120⋯01E0），不會改任何設定。車子要發動。</p>
+    <div class="row"><button class="btn pri" id="obdScan">開始掃描</button></div>
+    <div id="obdScanOut" class="note mt"></div>
+  </div>
+
+  <div class="card mt">
     <h2>背景執行測試</h2>
     <p class="note" style="margin-top:0">按下開始後，網頁每 2 秒記一筆。接著切到別的 App 或鎖螢幕，1 分鐘後再回來，看紀錄中間有沒有斷掉。不用連任何裝置。</p>
     <div class="row"><button class="btn pri" id="bgStart">開始 2 分鐘測試</button></div>
@@ -339,7 +346,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-04b";
+const VERSION = "2026-11-06a";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -876,6 +883,51 @@ $("testClear").onclick = () => {
 };
 $("rawSend").onclick = () => { const v = $("rawCmd").value.trim(); if (v) { auto = false; renderAuto(); valveSend(v); } };
 document.querySelectorAll("[data-raw]").forEach(b => b.onclick = () => { auto = false; renderAuto(); valveSend(b.dataset.raw, 2); });
+
+// 標準 Mode 01 PID 名稱（常用的）
+const PID_NAMES = {
+  0x04:"引擎負載", 0x05:"水溫", 0x06:"短期燃油修正 B1", 0x07:"長期燃油修正 B1", 0x0A:"油壓（燃油）", 0x0B:"進氣歧管絕對壓力（可算增壓）",
+  0x0C:"轉速", 0x0D:"車速", 0x0E:"點火提前角", 0x0F:"進氣溫度", 0x10:"空氣流量 MAF", 0x11:"節氣門開度",
+  0x1C:"OBD 標準", 0x1F:"發動後經過時間", 0x21:"故障燈亮後里程", 0x23:"油軌壓力（直噴）", 0x2C:"EGR 指令", 0x2E:"蒸發排放", 0x2F:"油箱油量",
+  0x30:"清碼後暖車次數", 0x31:"清碼後里程", 0x33:"大氣壓力", 0x34:"含氧感知器（寬域）", 0x3C:"觸媒溫度 B1S1", 0x3E:"觸媒溫度 B1S2",
+  0x41:"監測狀態", 0x42:"控制模組電壓", 0x43:"絕對負載", 0x44:"指令空燃比", 0x45:"相對節氣門", 0x46:"外氣溫度",
+  0x47:"節氣門位置 B", 0x49:"油門踏板位置 D", 0x4A:"油門踏板位置 E", 0x4C:"節氣門指令", 0x4D:"故障燈亮後時間", 0x4E:"清碼後時間",
+  0x51:"燃料種類", 0x52:"乙醇比例", 0x59:"油軌絕對壓力", 0x5A:"油門踏板相對位置", 0x5C:"機油溫度", 0x5D:"噴油正時", 0x5E:"油耗率",
+  0x61:"駕駛需求扭力 %", 0x62:"實際扭力 %", 0x63:"引擎參考扭力 Nm", 0x64:"扭力百分比資料",
+  0x67:"水溫（多感知器）", 0x68:"進氣溫度（多感知器）", 0x6F:"渦輪進氣壓力", 0x70:"增壓控制", 0x71:"VGT 控制", 0x72:"廢氣閥控制",
+  0x73:"排氣壓力", 0x74:"渦輪轉速", 0x75:"渦輪溫度 A", 0x76:"渦輪溫度 B", 0x77:"中冷器溫度", 0x78:"排氣溫度 B1", 0x7C:"DPF 溫度",
+  0x87:"進氣歧管絕對壓力（多感知器）", 0x8E:"摩擦扭力", 0x9D:"噴油量", 0x9E:"排氣流量",
+  0xA4:"變速箱實際檔位", 0xA6:"里程表"
+};
+async function obdScan() {
+  if (!obd.w) { log("請先連接 OBD"); return; }
+  obd.pause = true; $("obdScanOut").textContent = "掃描中⋯";
+  const ECU = { "7E8":"引擎電腦 PCM（7E8）", "7E9":"變速箱電腦 TCM（7E9）" };
+  const found = {}; // 回應位址 → Set(pid)
+  try {
+    await elmLog("ATH1"); // 暫時打開標頭，才分得出是哪顆電腦回的
+    for (let base = 0; base <= 0xC0; base += 0x20) {
+      const cmd = "01" + base.toString(16).toUpperCase().padStart(2, "0");
+      const r = await elmLog(cmd, 5000);
+      let more = false;
+      r.split(/[\r\n]+/).map(x => x.replace(/[\s>]/g, "").toUpperCase()).forEach(line => {
+        const m = line.match(new RegExp("^([0-9A-F]{3})[0-9A-F]{2}41" + cmd.slice(2) + "([0-9A-F]{8})"));
+        if (!m) return;
+        const set = found[m[1]] || (found[m[1]] = new Set()), bits = parseInt(m[2], 16) >>> 0;
+        for (let i = 0; i < 32; i++) if ((bits >>> (31 - i)) & 1) { set.add(base + i + 1); if (i === 31) more = true; }
+      });
+      if (!more) break; // 沒有人支援下一組就停
+    }
+  } finally { await elmLog("ATH0"); obd.pause = false; }
+  const out = Object.entries(found).sort().map(([k, set]) => {
+    const list = [...set].filter(p => p % 0x20 !== 0).sort((a, b) => a - b)
+      .map(p => `${p.toString(16).toUpperCase().padStart(2, "0")} ${PID_NAMES[p] || ""}`.trim());
+    return `<b>${ECU[k] || "電腦 " + k}</b>（${list.length} 項）<br>` + list.join("<br>");
+  });
+  $("obdScanOut").innerHTML = out.length ? out.join("<br><br>") : "沒有收到回應，車子有發動嗎？（看紀錄裡的回應內容）";
+  log("OBD 支援掃描：" + Object.entries(found).map(([k, set]) => k + " " + [...set].map(p => p.toString(16).toUpperCase().padStart(2, "0")).join(",")).join("；"));
+}
+$("obdScan").onclick = obdScan;
 
 async function obdManual(cmd) {
   if (!obd.w) { log("請先連接 OBD"); return; }
