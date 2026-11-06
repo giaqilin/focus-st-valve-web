@@ -331,6 +331,13 @@ td input{padding:7px 8px}
   </div>
 
   <div class="card mt">
+    <h2>Ford 擴充資料測試（Mode 22，只讀）</h2>
+    <p class="note" style="margin-top:0">代碼來自網路上的 Lufi Ford 設定檔，<b>還沒確認</b>適用 Focus MK4 自排，公式也是推測的。每按一次只讀一次，原始回應會寫進紀錄。請對照原廠儀表的數字（增壓、油溫、檔位），看哪些對得上。車子要發動、OBD 要「就緒」。</p>
+    <div class="row"><button class="btn pri" id="fordAll">全部讀一次</button></div>
+    <table class="mt" id="fordTbl"></table>
+  </div>
+
+  <div class="card mt">
     <h2>背景執行測試</h2>
     <p class="note" style="margin-top:0">按下開始後，網頁每 2 秒記一筆。接著切到別的 App 或鎖螢幕，1 分鐘後再回來，看紀錄中間有沒有斷掉。不用連任何裝置。</p>
     <div class="row"><button class="btn pri" id="bgStart">開始 2 分鐘測試</button></div>
@@ -347,7 +354,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-06b";
+const VERSION = "2026-11-06c";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -950,6 +957,67 @@ async function obdScan() {
 $("obdScan").onclick = obdScan;
 $("obdReinit").onclick = async () => { if (!obd.w) { log("請先連接 OBD"); return; } log("重新初始化 OBD…"); await obdInit(); };
 
+/* ---------- Ford 擴充資料（Mode 22） ---------- */
+const s16 = (a, b) => { const v = a * 256 + b; return v >= 32768 ? v - 65536 : v; };
+const FORD = [
+  { name:"渦輪增壓", ecu:"7E0", did:"0466", n:2, f:d => { const abs = (d[0]*256 + d[1]) / 128; return `${(abs - 100).toFixed(1)} kPa（絕對壓力 ${abs.toFixed(1)}）`; } },
+  { name:"變速箱檔位", ecu:"7E0", did:"1E12", n:1, f:d => ({70:"P", 60:"R", 50:"N"})[d[0]] || `D${d[0]}` },
+  { name:"變速箱檔位（變速箱電腦）", ecu:"7E1", did:"1E12", n:1, f:d => ({70:"P", 60:"R", 50:"N"})[d[0]] || `D${d[0]}` },
+  { name:"變速箱油溫", ecu:"7E0", did:"1E1C", n:2, f:d => (s16(d[0], d[1]) / 16).toFixed(1) + " °C" },
+  { name:"變速箱油溫（變速箱電腦）", ecu:"7E1", did:"1E1C", n:2, f:d => (s16(d[0], d[1]) / 16).toFixed(1) + " °C" },
+  { name:"變速箱油溫（版本 3）", ecu:"7E1", did:"1E3F", n:2, f:d => (s16(d[0], d[1]) / 4).toFixed(1) + " °C" },
+  { name:"變速箱油溫（版本 4）", ecu:"7E1", did:"180B", n:1, f:d => (d[0] - 40) + " °C" },
+  { name:"機油溫度", ecu:"7E0", did:"05FC", n:2, f:d => (s16(d[0], d[1]) / 64).toFixed(1) + " °C" },
+  { name:"機油盤溫度", ecu:"7E0", did:"03F3", n:1, f:d => (d[0] - 40) + " °C" },
+  { name:"機油壓力", ecu:"7E0", did:"0415", n:2, f:d => (d[0]*256 + d[1]) + "（單位待確認）" },
+  { name:"進氣溫度 2", ecu:"7E0", did:"03CA", n:1, f:d => (d[0] - 40) + " °C" },
+  { name:"爆震修正", ecu:"7E0", did:"03EC", n:2, f:d => "原始 " + s16(d[0], d[1]) },
+  { name:"變速箱檔位比例", ecu:"7E0", did:"1E3D", n:2, f:d => "原始 " + (d[0]*256 + d[1]) },
+  { name:"車外溫度", ecu:"7E0", did:"057D", n:1, f:d => (d[0] / 2 - 40).toFixed(1) + " °C" },
+  { name:"電池溫度", ecu:"726", did:"4029", n:1, f:d => (d[0] - 40) + " °C" },
+  { name:"電池可用容量", ecu:"726", did:"4028", n:1, f:d => d[0] + " %" },
+  { name:"車門開關", ecu:"726", did:"5B1D", n:1, f:d => ["左前","右前","左後","右後"].map((x, i) => x + ((d[0] >> i) & 1 ? "開" : "關")).join(" ") },
+];
+const NRC = { "11":"不支援這個服務", "12":"不支援", "13":"長度錯誤", "22":"目前條件不允許", "31":"沒有這個代碼", "33":"需要安全解鎖", "7F":"目前模式不支援" };
+const fordRes = {};
+function renderFord() {
+  $("fordTbl").innerHTML = "<thead><tr><th>資料</th><th>模組／代碼</th><th>結果</th><th></th></tr></thead><tbody>" +
+    FORD.map((x, i) => `<tr><td>${x.name}</td><td class="note">${x.ecu}<br>22${x.did}</td><td>${fordRes[i] || "—"}</td>` +
+      `<td><button class="btn" data-ford="${i}" style="padding:6px 10px;white-space:nowrap">讀取</button></td></tr>`).join("") + "</tbody>";
+  document.querySelectorAll("[data-ford]").forEach(b => b.onclick = () => fordRead([+b.dataset.ford]));
+}
+async function fordRead(list) {
+  if (!obd.w) { log("請先連接 OBD"); return; }
+  obd.pause = true;
+  let hdr = null;
+  try {
+    for (const i of list) {
+      const x = FORD[i];
+      if (hdr !== x.ecu) { await elmLog("ATSH" + x.ecu); hdr = x.ecu; }
+      const r = await elmLog("22" + x.did, 3000);
+      const lines = r.split(/[\r\n]+/).map(l => l.replace(/[\s>]/g, "").toUpperCase());
+      const ok = lines.find(l => l.startsWith("62" + x.did));
+      const neg = lines.find(l => l.startsWith("7F22"));
+      if (ok) {
+        const hex = ok.slice(6), d = [];
+        for (let k = 0; k < hex.length; k += 2) d.push(parseInt(hex.substr(k, 2), 16));
+        if (d.length < x.n) fordRes[i] = `資料太短：${hex}`;
+        else { let v; try { v = x.f(d); } catch (e) { v = "換算失敗"; } fordRes[i] = `<b>${v}</b><br><span class="note">原始 ${hex}</span>`; }
+      } else if (neg) {
+        const code = neg.slice(4, 6);
+        fordRes[i] = `❌ 車子拒絕（${code} ${NRC[code] || ""}）`;
+      } else if (/NO ?DATA/i.test(r)) fordRes[i] = "❌ 沒有回應（NO DATA），這個模組可能不在這條線上";
+      else fordRes[i] = r ? `❓ 看不懂的回應：${show(r)}` : "❌ 沒有回應";
+      log(`Ford ${x.name}（${x.ecu} 22${x.did}）：${fordRes[i].replace(/<[^>]+>/g, " ")}`);
+      renderFord();
+    }
+  } finally {
+    await elmLog("ATSH7DF"); // 換回一般 OBD 的廣播位址
+    obd.pause = false;
+  }
+}
+$("fordAll").onclick = () => fordRead(FORD.map((_, i) => i));
+
 async function obdManual(cmd) {
   if (!obd.w) { log("請先連接 OBD"); return; }
   obd.pause = true;
@@ -1112,7 +1180,7 @@ $("pillObd").onclick = async () => {
   catch (e) { log(isCancel(e) ? "沒有選到 OBD（取消，或附近找不到）" : "OBD 連線失敗：" + errText(e)); }
 };
 
-function renderAll() { renderConn(); renderLevels(); renderModeChips(); renderEditor(); renderPct(); renderTests(); renderAuto(); renderSim(); }
+function renderAll() { renderFord(); renderConn(); renderLevels(); renderModeChips(); renderEditor(); renderPct(); renderTests(); renderAuto(); renderSim(); }
 if (!navigator.bluetooth) $("noBle").classList.add("show");
 log("網頁版本 " + VERSION);
 $("ver").textContent = VERSION;
