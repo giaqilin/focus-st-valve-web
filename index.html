@@ -320,6 +320,7 @@ td input{padding:7px 8px}
       <button class="btn" data-obd="ATDPN">協定 ATDPN</button>
       <button class="btn" data-obd="ATRV">電壓 ATRV</button>
     </div>
+    <div class="row mt"><button class="btn" id="obdReinit">重新初始化 OBD（不用重新連線）</button></div>
   </div>
 
   <div class="card mt">
@@ -346,7 +347,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-06a";
+const VERSION = "2026-11-06b";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -502,10 +503,20 @@ const ELM_SPECS = [
 const obd = { dev:null, w:null, n:null, connected:false, buf:"", resolve:null, lock:Promise.resolve(), last:0 };
 const data = { rpm:null, spd:null, load:null, thr:null, ect:null };
 
+// 上一個指令逾時的話，OBD 可能還在處理；這時馬上送下一個會把它打斷（回 STOPPED），
+// 所以先等它回「>」提示符號，最多 4 秒
+function waitPrompt(ms) {
+  return new Promise(res => {
+    if (obd.buf.includes(">")) return res();
+    const to = setTimeout(() => { obd.promptWaiter = null; res(); }, ms);
+    obd.promptWaiter = () => { clearTimeout(to); res(); };
+  });
+}
 function elm(cmd, timeout = 1500) {
   obd.lock = obd.lock.then(() => new Promise(async res => {
+    if (obd.stale) { await waitPrompt(4000); obd.stale = false; }
     obd.buf = "";
-    const to = setTimeout(() => { obd.resolve = null; res(""); }, timeout);
+    const to = setTimeout(() => { obd.resolve = null; obd.stale = true; res(""); }, timeout);
     obd.resolve = r => { clearTimeout(to); res(r); };
     try { await bleWrite(obd.w, enc(cmd + "\r")); }
     catch (e) { clearTimeout(to); obd.resolve = null; res(""); }
@@ -514,7 +525,9 @@ function elm(cmd, timeout = 1500) {
 }
 function onElmData(e) {
   obd.buf += new TextDecoder().decode(e.target.value);
-  if (obd.buf.includes(">") && obd.resolve) { const r = obd.buf; obd.buf = ""; const f = obd.resolve; obd.resolve = null; f(r); }
+  if (!obd.buf.includes(">")) return;
+  if (obd.resolve) { const r = obd.buf; obd.buf = ""; const f = obd.resolve; obd.resolve = null; f(r); }
+  else if (obd.promptWaiter) { const f = obd.promptWaiter; obd.promptWaiter = null; f(); }
 }
 const show = r => JSON.stringify((r || "").replace(/\r/g, "⏎").replace(/\n/g, "")) ;
 async function elmLog(cmd, timeout) {
@@ -554,6 +567,13 @@ async function connectObd() {
   obd.n.addEventListener("characteristicvaluechanged", onElmData);
   await obd.n.startNotifications();
   log("OBD 已連線：" + (dev.name || "未命名") + "，服務 " + String(found.svc).slice(4, 8) + "，初始化中…");
+  obd.connected = true; renderConn();
+  await obdInit();
+  keepAwake();
+  pollObd();
+}
+async function obdInit() {
+  obd.pause = true;
   await elmLog("ATZ", 3000);
   // 直接指定 CAN 11bit 500k（Focus MK4 實測是協定 6），省掉自動偵測的 5 秒多
   for (const c of ["ATE0", "ATL0", "ATS0", "ATH0", "ATSP6"]) await elmLog(c);
@@ -564,10 +584,10 @@ async function connectObd() {
     r = await elmLog("0100", 10000);
   }
   await elmLog("ATDPN");
-  obd.connected = true; obd.bad = 0; renderConn();
-  log(/4100/.test(r.replace(/\s/g, "")) ? "OBD 就緒" : "OBD 已連線，但車子沒有正常回應（看上面幾行的回應內容）");
-  keepAwake();
-  pollObd();
+  obd.bad = 0; obd.pause = false; renderConn();
+  const ok = /4100/.test(r.replace(/\s/g, ""));
+  log(ok ? "OBD 就緒" : "OBD 已連線，但車子沒有正常回應（看上面幾行的回應內容）。確認車子已經發動，再到實驗室按「重新初始化 OBD」");
+  return ok;
 }
 async function pollObd() {
   // 轉速每兩次讀一次、負載每四次讀一次，其他的輪流讀
@@ -928,6 +948,7 @@ async function obdScan() {
   log("OBD 支援掃描：" + Object.entries(found).map(([k, set]) => k + " " + [...set].map(p => p.toString(16).toUpperCase().padStart(2, "0")).join(",")).join("；"));
 }
 $("obdScan").onclick = obdScan;
+$("obdReinit").onclick = async () => { if (!obd.w) { log("請先連接 OBD"); return; } log("重新初始化 OBD…"); await obdInit(); };
 
 async function obdManual(cmd) {
   if (!obd.w) { log("請先連接 OBD"); return; }
