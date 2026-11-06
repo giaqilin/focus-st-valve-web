@@ -340,6 +340,18 @@ td input{padding:7px 8px}
   </div>
 
   <div class="card mt">
+    <h2>車上網路監聽（只聽，不送指令給車子）</h2>
+    <p class="note" style="margin-top:0">OBD 只「聽」車上網路的訊號（ATMA），找駕駛模式。做法：<br>1. 停在 <b>Normal</b>，按「錄 A」，10 秒內<b>不要動任何東西</b><br>2. 切到 <b>Sport</b>，等 2 秒，按「錄 B」，一樣 10 秒不要動<br>3. 按「比較 A 和 B」，列出只有切模式時才變的訊號<br>錄的時候會暫停讀轉速和自動控制閥門。如果一個訊號都聽不到，代表 OBD 孔前面有閘道器擋住。</p>
+    <div class="row">
+      <button class="btn pri" id="monA">錄 A</button>
+      <button class="btn pri" id="monB">錄 B</button>
+      <button class="btn" id="monCmp">比較 A 和 B</button>
+    </div>
+    <div class="row mt"><button class="btn" id="monCopy">複製 A／B 原始資料</button></div>
+    <div id="monOut" class="note mt"></div>
+  </div>
+
+  <div class="card mt">
     <h2>背景執行測試</h2>
     <p class="note" style="margin-top:0">按下開始後，網頁每 2 秒記一筆。接著切到別的 App 或鎖螢幕，1 分鐘後再回來，看紀錄中間有沒有斷掉。不用連任何裝置。</p>
     <div class="row"><button class="btn pri" id="bgStart">開始 2 分鐘測試</button></div>
@@ -356,7 +368,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-06e";
+const VERSION = "2026-11-06f";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -533,7 +545,9 @@ function elm(cmd, timeout = 1500) {
   return obd.lock;
 }
 function onElmData(e) {
-  obd.buf += new TextDecoder().decode(e.target.value);
+  const chunk = new TextDecoder().decode(e.target.value);
+  if (obd.mon) { obd.mon(chunk); return; }
+  obd.buf += chunk;
   if (!obd.buf.includes(">")) return;
   if (obd.resolve) { const r = obd.buf; obd.buf = ""; const f = obd.resolve; obd.resolve = null; f(r); }
   else if (obd.promptWaiter) { const f = obd.promptWaiter; obd.promptWaiter = null; f(); }
@@ -1081,6 +1095,84 @@ $("fordLive").onclick = () => {
   fordLive = true; $("fordLive").textContent = "停止連續讀取"; log("Ford 連續讀取開始"); fordLiveLoop();
 };
 $("fordAll").onclick = () => fordRead(FORD.map((_, i) => i));
+
+/* ---------- 車上網路監聽（ATMA） ---------- */
+const monCap = { A:null, B:null };
+async function monRecord(tag, secs = 10) {
+  if (!obd.w) { log("請先連接 OBD"); return; }
+  if (obd.mon) { log("監聽中，請等這一輪結束"); return; }
+  obd.pause = true;
+  const cap = { tag, at: Date.now(), msgs: {}, lines: 0, full: 0, raw: [] };
+  $("monOut").textContent = `錄 ${tag} 中⋯ ${secs} 秒，不要動任何東西`;
+  try {
+    // 顯示標頭、不加空白、關掉自動格式（看完整 8 個位元組）
+    for (const c of ["ATH1", "ATS0", "ATCAF0"]) await elmLog(c);
+    let part = "";
+    const startMon = () => bleWrite(obd.w, enc("ATMA\r")).catch(() => {});
+    obd.mon = chunk => {
+      part += chunk;
+      const ls = part.split(/[\r\n]+/); part = ls.pop();
+      for (let l of ls) {
+        l = l.replace(/[\s>]/g, "").toUpperCase();
+        if (!l || l === "ATMA") continue;
+        if (/BUFFERFULL/.test(l)) { cap.full++; if (obd.mon) startMon(); continue; } // 便宜的 ELM 跟不上，就重新開始聽
+        const m = l.match(/^([0-9A-F]{3}|[0-9A-F]{8})([0-9A-F]{0,16})$/);
+        if (!m) continue;
+        cap.lines++;
+        if (cap.raw.length < 5000) cap.raw.push(`${Date.now() - cap.at},${m[1]},${m[2]}`);
+        (cap.msgs[m[1]] || (cap.msgs[m[1]] = [])).push(m[2]);
+      }
+    };
+    await startMon();
+    for (let k = secs; k > 0; k--) { $("monOut").textContent = `錄 ${tag} 中⋯ 還有 ${k} 秒，已收到 ${cap.lines} 筆`; await sleep(1000); }
+    obd.mon = null; obd.buf = "";
+    await bleWrite(obd.w, enc("\r")); // 任何字元都會停止監聽
+    await waitPrompt(2000);
+  } finally {
+    obd.mon = null; obd.buf = "";
+    for (const c of ["ATCAF1", "ATH0"]) await elmLog(c);
+    obd.pause = false;
+  }
+  monCap[tag] = cap;
+  const ids = Object.keys(cap.msgs).sort();
+  const sum = cap.lines
+    ? `錄 ${tag} 完成：收到 <b>${cap.lines}</b> 筆、<b>${ids.length}</b> 種訊號${cap.full ? `（OBD 跟不上 ${cap.full} 次，有漏資料）` : ""}<br><span class="note">${ids.slice(0, 60).join(" ")}${ids.length > 60 ? " ⋯" : ""}</span>`
+    : `錄 ${tag}：<b>一筆都沒聽到</b>。OBD 孔前面應該有閘道器，只放行診斷用的訊號，這個方法行不通。`;
+  $("monOut").innerHTML = sum;
+  log(`監聽 ${tag}：${cap.lines} 筆，${ids.length} 種訊號 ${ids.join(",")}${cap.full ? `，跟不上 ${cap.full} 次` : ""}`);
+}
+function monCompare() {
+  const A = monCap.A, B = monCap.B;
+  if (!A || !B) { $("monOut").textContent = "要先錄 A 和 B"; return; }
+  const out = [];
+  for (const id of Object.keys(A.msgs)) {
+    if (!B.msgs[id]) continue;
+    const a = A.msgs[id], b = B.msgs[id], len = Math.max(...a.map(x => x.length), ...b.map(x => x.length)) / 2;
+    const diff = [];
+    for (let k = 0; k < len; k++) {
+      const sa = new Set(a.map(x => x.substr(k * 2, 2))), sb = new Set(b.map(x => x.substr(k * 2, 2)));
+      // A 和 B 各自都很穩定（最多 2 種值），而且兩邊完全沒有重疊 → 很可能是「模式」這種狀態值
+      if (sa.size <= 2 && sb.size <= 2 && ![...sa].some(v => sb.has(v))) diff.push(`第 ${k + 1} 個位元組：A=${[...sa].join("/")} → B=${[...sb].join("/")}`);
+    }
+    if (diff.length) out.push({ id, diff, n: a.length + b.length, score: diff.length * 10 + Math.min(a.length, b.length) });
+  }
+  const onlyA = Object.keys(A.msgs).filter(id => !B.msgs[id]), onlyB = Object.keys(B.msgs).filter(id => !A.msgs[id]);
+  out.sort((x, y) => y.score - x.score);
+  $("monOut").innerHTML = (out.length
+    ? `<b>只在切模式後才改變的訊號（${out.length} 個，越上面越可能）</b><br>` + out.slice(0, 25).map(o => `<b>${o.id}</b>（${o.n} 筆）<br>` + o.diff.join("<br>")).join("<br><br>")
+    : "<b>找不到 A、B 之間穩定不同的訊號。</b>")
+    + (onlyA.length || onlyB.length ? `<br><br><span class="note">只有 A 有：${onlyA.join(" ") || "—"}<br>只有 B 有：${onlyB.join(" ") || "—"}</span>` : "");
+  log(`監聽比較：${out.length} 個候選 ${out.slice(0, 10).map(o => o.id).join(",")}`);
+}
+$("monA").onclick = () => monRecord("A");
+$("monB").onclick = () => monRecord("B");
+$("monCmp").onclick = monCompare;
+$("monCopy").onclick = async () => {
+  const txt = ["A", "B"].filter(t => monCap[t]).map(t => `# ${t}\nms,id,data\n` + monCap[t].raw.join("\n")).join("\n");
+  if (!txt) { log("還沒有監聽資料"); return; }
+  try { await navigator.clipboard.writeText(txt); log("已複製監聽原始資料"); }
+  catch (e) { const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); log("已複製監聽原始資料"); } catch (x) { log("複製失敗"); } ta.remove(); }
+};
 
 async function obdManual(cmd) {
   if (!obd.w) { log("請先連接 OBD"); return; }
