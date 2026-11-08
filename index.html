@@ -136,6 +136,12 @@ td input{padding:7px 8px}
         <div class="stat"><b id="vThr">—</b><span>節氣門 %</span></div>
         <div class="stat"><b id="vEct">—</b><span>水溫 °C</span></div>
       </div>
+      <div class="stats" style="margin-top:6px">
+        <div class="stat"><b id="vBoost">—</b><span>增壓 bar</span></div>
+        <div class="stat"><b id="vGear">—</b><span>檔位</span></div>
+        <div class="stat"><b id="vPedal">—</b><span>油門踏板 %</span></div>
+        <div class="stat"><b id="vOilT">—</b><span>機油 °C</span></div>
+      </div>
     </div>
 
     <div class="card">
@@ -251,7 +257,9 @@ td input{padding:7px 8px}
       <button class="toggle" id="recBtn" style="flex:0 0 auto">記錄<span class="sw" id="recSw"></span></button>
     </div>
     <p class="note">連上 OBD 就會自動記錄，每 0.5 秒一筆：轉速、負載、車速、節氣門、水溫、閥門目標和實際段數。存在這支手機裡，最多保留約 4 小時，超過會從最舊的開始刪。</p>
-    <div id="recStat" class="note"></div>
+    <div class="note mt">車子現在的駕駛模式（換模式時順手點一下，紀錄會標上去，之後可以分析各模式的油門反應差在哪）：</div>
+    <div class="chips mt" id="carModeChips"></div>
+    <div id="recStat" class="note mt"></div>
     <div class="row mt">
       <button class="btn pri" id="recShare">分享 CSV 檔</button>
       <button class="btn" id="recCopy">複製 CSV</button>
@@ -368,7 +376,7 @@ td input{padding:7px 8px}
 <script>
 "use strict";
 /* ---------- 指令 ---------- */
-const VERSION = "2026-11-06f";
+const VERSION = "2026-11-08a";
 const CMD_CLOSE = "clostnslrjkl";
 const CMD_OPEN  = "TNOPENzrjkl";
 const pctCmd = p => "bf" + String(Math.max(0, Math.min(99, p|0))).padStart(2, "0") + "hyzrjkl";
@@ -522,7 +530,8 @@ const ELM_SPECS = [
   { svc:"e7810a71-73ae-499d-8c15-faa9aef0c3f2", w:"bef8d6c9-9c21-4c9e-b632-bd58c1009f9f", n:"bef8d6c9-9c21-4c9e-b632-bd58c1009f9f" },
 ];
 const obd = { dev:null, w:null, n:null, connected:false, buf:"", resolve:null, lock:Promise.resolve(), last:0 };
-const data = { rpm:null, spd:null, load:null, thr:null, ect:null };
+const data = { rpm:null, spd:null, load:null, thr:null, ect:null, pedal:null, thrAct:null, thrDes:null, map:null, baro:null, gear:null, oilT:null, atfT:null, iat2:null };
+obd.hdr = "7DF"; // 平常輪詢用的位址：7E0（直接問引擎電腦，Mode 01／22 都能用）或 7DF（廣播）
 
 // 上一個指令逾時的話，OBD 可能還在處理；這時馬上送下一個會把它打斷（回 STOPPED），
 // 所以先等它回「>」提示符號，最多 4 秒
@@ -607,32 +616,62 @@ async function obdInit() {
     r = await elmLog("0100", 10000);
   }
   await elmLog("ATDPN");
-  obd.bad = 0; obd.pause = false; renderConn();
   const ok = /4100/.test(r.replace(/\s/g, ""));
+  obd.hdr = "7DF";
+  if (ok) {
+    const b = pid(await elmLog("0133"), "33", 1); if (b) data.baro = b[0];
+    // 改成直接問引擎電腦，這樣 Ford 的 Mode 22 資料也能一起輪詢，不用一直切換位址
+    await elmLog("ATSH7E0");
+    if (pid(await elmLog("010C"), "0C", 2)) obd.hdr = "7E0";
+    else { await elmLog("ATSH7DF"); log("直接問引擎電腦（7E0）沒有回應，改用廣播，Ford 擴充資料不會加進輪詢"); }
+  }
+  pollCh.forEach(c => c.fails = 0);
+  obd.bad = 0; obd.pause = false; renderConn();
   log(ok ? "OBD 就緒" : "OBD 已連線，但車子沒有正常回應（看上面幾行的回應內容）。確認車子已經發動，再到實驗室按「重新初始化 OBD」");
   return ok;
 }
+// 輪詢清單：單數輪讀轉速，雙數輪依序讀下面這些。ford:true 的要直接問引擎電腦（7E0）才讀得到
+const s16 = (a, b) => { const v = a * 256 + b; return v >= 32768 ? v - 65536 : v; };
+const did = (r, d) => { const l = r.split(/[\r\n]+/).map(x => x.replace(/[\s>]/g, "").toUpperCase()).find(x => x.startsWith("62" + d)); if (!l) return null; const h = l.slice(6), o = []; for (let k = 0; k + 2 <= h.length; k += 2) o.push(parseInt(h.substr(k, 2), 16)); return o; };
+const pollCh = [
+  { c:"0104", f:b => data.load = Math.round(b[0] * 100 / 255) },
+  { c:"0149", f:b => data.pedal = Math.round(b[0] * 100 / 255) },
+  { c:"22093C", ford:true, n:2, f:b => data.thrAct = Math.round((b[0]*256 + b[1]) * 1000 / 8192) / 10 },
+  { c:"010B", f:b => data.map = b[0] },
+  { c:"0104", f:b => data.load = Math.round(b[0] * 100 / 255) },
+  { c:"22091A", ford:true, n:2, f:b => data.thrDes = Math.round((b[0]*256 + b[1]) * 1000 / 8192) / 10 },
+  { c:"221E12", ford:true, n:1, f:b => data.gear = b[0] },
+  { c:"010D", f:b => data.spd = b[0] },
+  { c:"0104", f:b => data.load = Math.round(b[0] * 100 / 255) },
+  { c:"0111", f:b => data.thr = Math.round(b[0] * 100 / 255) },
+  { c:"010B", f:b => data.map = b[0] },
+  { c:"0105", f:b => data.ect = b[0] - 40 },
+  { c:"2205FC", ford:true, n:2, f:b => data.oilT = Math.round(s16(b[0], b[1]) / 6.4) / 10 },
+  { c:"221E1C", ford:true, n:2, f:b => data.atfT = Math.round(s16(b[0], b[1]) / 1.6) / 10 },
+  { c:"2203CA", ford:true, n:1, f:b => data.iat2 = b[0] - 40 },
+];
+pollCh.forEach(c => c.fails = 0);
 async function pollObd() {
-  // 轉速每兩次讀一次、負載每四次讀一次，其他的輪流讀
-  const extra = ["010D", "0111", "0105"]; let k = 0, step = 0;
-  const one = async c => {
-    const r = await elm(c);
-    if (c === "010C") {
-      const a = pid(r, "0C", 2);
-      if (a) { data.rpm = Math.round((a[0]*256 + a[1]) / 4); obd.last = Date.now(); obd.bad = 0; }
-      else if (obd.bad++ % 25 === 0) log("OBD 010C 讀不到轉速，回應：" + (r ? show(r) : "（沒有回應）"));
-      return;
-    }
-    const b = pid(r, c.slice(2), 1); if (!b) return;
-    if (c === "0104") data.load = Math.round(b[0] * 100 / 255);
-    if (c === "010D") data.spd = b[0];
-    if (c === "0111") data.thr = Math.round(b[0] * 100 / 255);
-    if (c === "0105") data.ect = b[0] - 40;
-  };
+  let k = 0, step = 0;
   while (obd.connected) {
     if (obd.pause) { await sleep(200); continue; }
-    const seq = step++ % 4;
-    await one(seq === 0 || seq === 2 ? "010C" : seq === 1 ? "0104" : extra[k++ % 3]);
+    if (step++ % 2 === 0) {
+      const r = await elm("010C"), a = pid(r, "0C", 2);
+      if (a) { data.rpm = Math.round((a[0]*256 + a[1]) / 4); obd.last = Date.now(); obd.bad = 0; }
+      else if (obd.bad++ % 25 === 0) log("OBD 010C 讀不到轉速，回應：" + (r ? show(r) : "（沒有回應）"));
+      continue;
+    }
+    // 找下一個還能用的項目（連續失敗 8 次就不再讀）
+    let ch = null;
+    for (let t = 0; t < pollCh.length && !ch; t++) {
+      const x = pollCh[k++ % pollCh.length];
+      if (x.fails < 8 && (!x.ford || obd.hdr === "7E0")) ch = x;
+    }
+    if (!ch) continue;
+    const r = await elm(ch.c);
+    const v = ch.c.startsWith("22") ? did(r, ch.c.slice(2)) : pid(r, ch.c.slice(2), 1);
+    if (v && v.length >= (ch.n || 1)) { ch.f(v); ch.fails = 0; }
+    else if (++ch.fails === 8) log(`OBD ${ch.c} 連續 8 次讀不到，之後不再讀（回應：${r ? show(r) : "沒有回應"}）`);
   }
 }
 
@@ -680,8 +719,10 @@ function setLevel(i) {
 let tHist = [], downSince = 0;
 const upMs = () => S.upMs >= 0 ? S.upMs : 400;
 const downMs = () => S.downMs >= 0 ? S.downMs : 1500;
+const gearName = g => ({ 70:"P", 60:"R", 50:"N" })[g] || (g >= 1 && g <= 10 ? "D" + g : "?" + g);
 /* ---------- 行車紀錄 ---------- */
-// 每筆：[時間 ms, 轉速, 負載, 車速, 節氣門, 水溫, 目標段, 實際段, 模式名稱]
+// 每筆：[時間 ms, 轉速, 負載, 車速, 節氣門, 水溫, 目標段, 實際段, 模式名稱,
+//        油門踏板, 節氣門實際, 節氣門目標, 增壓 kPa（歧管−大氣）, 檔位, 機油溫, 變速箱油溫, 進氣溫 2, 車子的駕駛模式（手動標記）]
 const REC_MAX = 30000;
 let rec = []; try { rec = JSON.parse(localStorage.getItem("valveRec")) || []; } catch (e) { rec = []; }
 let recLast = 0, recDirty = false, recSaved = Date.now();
@@ -689,7 +730,9 @@ const recSave = () => { if (!recDirty) return; try { localStorage.setItem("valve
 function recPush(d, now) {
   if (S.recOn === false || now - recLast < 500) return;
   recLast = now;
-  rec.push([now, d.rpm, d.load ?? null, d.spd ?? null, d.thr ?? null, d.ect ?? null, target, applied, mode().name]);
+  rec.push([now, d.rpm, d.load ?? null, d.spd ?? null, d.thr ?? null, d.ect ?? null, target, applied, mode().name,
+    d.pedal ?? null, d.thrAct ?? null, d.thrDes ?? null, d.map != null && d.baro != null ? d.map - d.baro : null,
+    d.gear ?? null, d.oilT ?? null, d.atfT ?? null, d.iat2 ?? null, S.carMode || ""]);
   if (rec.length > REC_MAX) rec.splice(0, rec.length - REC_MAX);
   recDirty = true;
   if (now - recSaved > 10000) recSave();
@@ -745,6 +788,10 @@ function renderDash(src, d) {
   $("vSpd").textContent = src ? f(d.spd) : "—";
   $("vThr").textContent = src ? f(d.thr) : "—";
   $("vLoad").textContent = src ? f(d.load) : "—";
+  $("vBoost").textContent = src && d.map != null && d.baro != null ? ((d.map - d.baro) / 100).toFixed(2) : "—";
+  $("vGear").textContent = src && d.gear != null ? gearName(d.gear) : "—";
+  $("vPedal").textContent = src ? f(d.pedal) : "—";
+  $("vOilT").textContent = src && d.oilT != null ? Math.round(d.oilT) : "—";
   $("vEct").textContent = src ? f(d.ect) : "—";
   $("vSrc").textContent = src === "obd" ? "資料來源：OBD" : src === "sim" ? "資料來源：模擬" : (obd.connected ? "等待 OBD 回應…" : "沒有轉速資料：連接 OBD，或在下方開啟模擬");
   document.querySelectorAll(".lv").forEach(b => {
@@ -948,6 +995,7 @@ async function obdScan() {
   const ECU = { "7E8":"引擎電腦 PCM（7E8）", "7E9":"變速箱電腦 TCM（7E9）" };
   const found = {}; // 回應位址 → Set(pid)
   try {
+    await elmLog("ATSH7DF"); // 廣播，讓每顆電腦都回答
     await elmLog("ATH1"); // 暫時打開標頭，才分得出是哪顆電腦回的
     for (let base = 0; base <= 0xC0; base += 0x20) {
       const cmd = "01" + base.toString(16).toUpperCase().padStart(2, "0");
@@ -961,7 +1009,7 @@ async function obdScan() {
       });
       if (!more) break; // 沒有人支援下一組就停
     }
-  } finally { await elmLog("ATH0"); obd.pause = false; }
+  } finally { await elmLog("ATH0"); if (obd.hdr !== "7DF") await elmLog("ATSH" + obd.hdr); obd.pause = false; }
   const out = Object.entries(found).sort().map(([k, set]) => {
     const list = [...set].filter(p => p % 0x20 !== 0).sort((a, b) => a - b)
       .map(p => `${p.toString(16).toUpperCase().padStart(2, "0")} ${PID_NAMES[p] || ""}`.trim());
@@ -974,7 +1022,6 @@ $("obdScan").onclick = obdScan;
 $("obdReinit").onclick = async () => { if (!obd.w) { log("請先連接 OBD"); return; } log("重新初始化 OBD…"); await obdInit(); };
 
 /* ---------- Ford 擴充資料（Mode 22） ---------- */
-const s16 = (a, b) => { const v = a * 256 + b; return v >= 32768 ? v - 65536 : v; };
 const FORD = [
   { name:"增壓（標準：歧管壓力 − 大氣壓力）", live:true, std:["010B", "0133"], f:d => `${((d[0] - d[1]) / 100).toFixed(2)} bar<br><span class="note">歧管 ${d[0]} kPa、大氣 ${d[1]} kPa</span>` },
   { name:"車外溫度（標準 0146）", std:["0146"], f:d => (d[0] - 40) + " °C" },
@@ -1053,7 +1100,7 @@ async function fordRead(list) {
       renderFord();
     }
   } finally {
-    if (hdr.h !== "7DF") await elmLog("ATSH7DF"); // 換回一般 OBD 的廣播位址
+    if (hdr.h !== obd.hdr) await elmLog("ATSH" + obd.hdr); // 換回平常輪詢用的位址
     obd.pause = false;
   }
 }
@@ -1085,7 +1132,7 @@ async function fordLiveLoop() {
       renderFord();
     }
   } finally {
-    await elm("ATSH7DF"); obd.pause = false; fordLive = false;
+    await elm("ATSH" + obd.hdr); obd.pause = false; fordLive = false;
     $("fordLive").textContent = "連續讀取（對照儀表）"; log("Ford 連續讀取已停止");
   }
 }
@@ -1204,7 +1251,18 @@ const LV_COLORS = ["#4a5260", "#7a4f14", "#a8691a", "#d4861f", "#f5a524", "#ffd2
 const pctile = (arr, q) => { if (!arr.length) return null; const a = [...arr].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(q * a.length))]; };
 function recRange(xs) { return xs.length ? `${pctile(xs, .1)}～${pctile(xs, .9)}` : "—"; }
 function recAvg(xs) { return xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : "—"; }
+const CAR_MODES = ["", "Normal", "Sport", "Track", "Eco", "濕滑"];
+function renderCarModes() {
+  const el = $("carModeChips"); el.innerHTML = "";
+  CAR_MODES.forEach(m => {
+    const c = document.createElement("button");
+    c.className = "chip" + ((S.carMode || "") === m ? " act" : ""); c.textContent = m || "不標記";
+    c.onclick = () => { S.carMode = m; save(); renderCarModes(); log("車子駕駛模式標記：" + (m || "不標記")); };
+    el.appendChild(c);
+  });
+}
 function renderRec() {
+  renderCarModes();
   $("recSw").classList.toggle("on", S.recOn !== false);
   // 總時間：相鄰兩筆間隔 5 秒內才算
   let dur = 0, sw = 0, prevLv = null;
@@ -1235,6 +1293,21 @@ function renderRec() {
     row("怠速", groups.idle) + row("巡航", groups.cruise) + row("加速", groups.accel) + row("全部", groups.all) +
     `<tr><td>最高</td><td></td><td>${maxOf(2)}</td><td></td><td>${maxOf(1)}</td></tr>` +
     `<tr><td colspan="5" class="note">閥門時間占比：` + lvTime.map((t, i) => dur ? `${lvName(i)} ${Math.round(t * 100 / dur)}%` : "").filter(x => x && !/ 0%$/.test(x)).join("、") + `</td></tr></tbody>`;
+  // 油門反應：同樣的踏板深度，節氣門目標開多少（各駕駛模式比較）
+  const byMode = {};
+  rec.forEach(r => {
+    const pedal = r[9], des = r[11], m = r[17];
+    if (!m || pedal == null || des == null || pedal < 8 || pedal > 60 || r[1] < 1200) return;
+    const bin = Math.min(5, Math.floor(pedal / 10)); // 0–9、10–19⋯50–60
+    ((byMode[m] || (byMode[m] = {}))[bin] || (byMode[m][bin] = [])).push(des);
+  });
+  const modes = Object.keys(byMode);
+  $("recSum").innerHTML += modes.length
+    ? `<tr><td colspan="5"><b>油門反應</b>（踏板深度 → 節氣門目標開度平均，依你標記的駕駛模式）<br>` +
+      `<table><tr><th>踏板</th>${modes.map(m => `<th>${m}</th>`).join("")}</tr>` +
+      [1, 2, 3, 4, 5].map(bn => `<tr><td>${bn * 10}～${bn * 10 + 9}%</td>${modes.map(m => { const xs = (byMode[m][bn] || []); return `<td>${xs.length ? recAvg(xs) + "%<span class=note>（" + xs.length + "）</span>" : "—"}</td>`; }).join("")}</tr>`).join("") +
+      `</table><span class="note">同一列裡 Sport 明顯比 Normal 大，就能用這個差異「猜」出車子現在的模式</span></td></tr>`
+    : `<tr><td colspan="5" class="note">還沒有標記駕駛模式的資料。開車時在上面點選車子目前的模式，就能比較各模式的油門反應。</td></tr>`;
   $("recLegend").innerHTML = LV_COLORS.map((c, i) => `<span><i style="background:${c}"></i>${lvName(i)}</span>`).join("");
   drawRecChart();
 }
@@ -1276,10 +1349,10 @@ $("recChart").addEventListener("click", e => {
     : "附近沒有點，再點靠近一點";
 });
 function recCsv() {
-  const head = "time,rpm,load_pct,speed_kmh,throttle_pct,coolant_c,target_level,applied_level,mode";
+  const head = "time,rpm,load_pct,speed_kmh,throttle_pct,coolant_c,target_level,applied_level,mode,pedal_pct,throttle_actual_pct,throttle_desired_pct,boost_kpa,gear,oil_c,atf_c,iat2_c,car_drive_mode";
   const pad = n => String(n).padStart(2, "0");
   const ts = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, "0")}`; };
-  return [head].concat(rec.map(r => [ts(r[0]), ...r.slice(1, 8).map(v => v ?? ""), r[8]].join(","))).join("\n");
+  return [head].concat(rec.map(r => [ts(r[0]), ...r.slice(1, 8).map(v => v ?? ""), r[8], ...Array.from({ length: 9 }, (_, i) => r[9 + i] ?? "")].join(","))).join("\n");
 }
 $("recBtn").onclick = () => { S.recOn = S.recOn === false; save(); renderRec(); log("行車紀錄：" + (S.recOn ? "開始記錄" : "暫停記錄")); };
 $("recShare").onclick = async () => {
